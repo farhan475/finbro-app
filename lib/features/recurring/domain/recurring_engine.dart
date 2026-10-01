@@ -108,7 +108,7 @@ class RecurringEngine {
         try {
           await confirm(inst.id, now: now);
         } on LedgerValidationException catch (e) {
-          AppLogger.error('Auto-confirm ${rule.name} ${isoDate(inst.dueDate)} gagal: ${e.message}');
+          AppLogger.error('Auto-confirm rule ${rule.id} ${isoDate(inst.dueDate)} gagal: ${e.message}');
         }
       }
     }
