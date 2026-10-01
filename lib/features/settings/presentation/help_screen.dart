@@ -52,6 +52,31 @@ class HelpScreen extends StatelessWidget {
             title: 'Hasil scan',
             body: 'Hasil scan struk selalu berupa draf. Periksa nominal dan tanggal sebelum menyimpan.',
           ),
+          SizedBox(height: 8),
+          SectionHeader('Pertanyaan umum'),
+          _HelpItem(
+            icon: Icons.swap_horiz,
+            title: 'Apakah transfer dihitung sebagai pemasukan/pengeluaran?',
+            body: 'Tidak. Transfer hanya memindahkan uang antar account, jadi total saldo tidak berubah '
+                'dan tidak masuk ke arus kas.',
+          ),
+          _HelpItem(
+            icon: Icons.savings_outlined,
+            title: 'Apa itu Available to Spend?',
+            body: 'Sisa uang yang aman dipakai: total saldo dikurangi dana yang dicadangkan, kewajiban '
+                'terjadwal, dan minimum cash buffer. Rinciannya bisa dibuka dari kartu di Home.',
+          ),
+          _HelpItem(
+            icon: Icons.fact_check_outlined,
+            title: 'Saldo tidak sama dengan saldo asli',
+            body: 'Buka detail account, masukkan saldo sebenarnya, dan lihat selisihnya terhadap saldo '
+                'hitungan FinBro.',
+          ),
+          _HelpItem(
+            icon: Icons.phone_android_outlined,
+            title: 'Pindah ke HP baru',
+            body: 'Buat backup di HP lama, pindahkan berkasnya, lalu pilih Restore di HP baru.',
+          ),
         ],
       ),
     );
