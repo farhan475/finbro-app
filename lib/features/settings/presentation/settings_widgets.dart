@@ -16,6 +16,7 @@ import '../domain/startup_checks.dart';
 abstract final class SettingsPaths {
   static const appearance = '/settings/appearance';
   static const about = '/settings/about';
+  static const help = '/settings/help';
 }
 
 const themeModeLabels = {'system': 'Ikuti sistem', 'light': 'Terang', 'dark': 'Gelap'};
@@ -87,6 +88,7 @@ class SettingsGroup extends ConsumerWidget {
           route: Routes.backup,
         ),
         const NavTile(icon: Icons.article_outlined, title: 'Log aplikasi', route: Routes.log),
+        const NavTile(icon: Icons.help_outline, title: 'Bantuan', route: SettingsPaths.help),
         const NavTile(icon: Icons.info_outline, title: 'Tentang', route: SettingsPaths.about),
       ],
     );

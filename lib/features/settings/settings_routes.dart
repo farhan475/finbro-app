@@ -5,6 +5,7 @@ import '../backup/presentation/backup_screen.dart';
 import '../onboarding/presentation/onboarding_screen.dart';
 import '../security/presentation/security_screen.dart';
 import 'presentation/about_screen.dart';
+import 'presentation/help_screen.dart';
 import 'presentation/log_screen.dart';
 import 'presentation/settings_screen.dart';
 import 'presentation/settings_widgets.dart';
@@ -18,4 +19,5 @@ final List<RouteBase> settingsRoutes = [
   GoRoute(path: Routes.log, builder: (_, _) => const LogScreen()),
   GoRoute(path: SettingsPaths.appearance, builder: (_, _) => const AppearanceScreen()),
   GoRoute(path: SettingsPaths.about, builder: (_, _) => const AboutScreen()),
+  GoRoute(path: SettingsPaths.help, builder: (_, _) => const HelpScreen()),
 ];
