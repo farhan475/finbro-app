@@ -1,7 +1,7 @@
 # FinBro Implementation Summary
 
 Date: 2 Oktober 2026 · Version 1.0.0+1 · Application ID `id.finbro.app`
-Verified: `flutter analyze` clean. Earlier full suite: 243 passing; after the latest navbar/FAB change, three related suites passed. Device release UI is not verified; see `STATUS.md`.
+Verified: `flutter analyze` clean. Full suite: 253 tests passing (2 Okt 2026, includes 6 new statement-import tests). Device release UI is not verified; see `STATUS.md`.
 
 Spec: planning pack in `~/Downloads/finebro app/`. Details and decisions: `README.md`. Release readiness and open work: `STATUS.md`.
 
@@ -15,6 +15,7 @@ Spec: planning pack in `~/Downloads/finebro app/`. Details and decisions: `READM
 - Reports: income vs expense, spending donut, top spending, budget vs actual, metrics panel (N/A on zero denominators), CSV export, PDF monthly report export.
 - Notifications (`flutter_local_notifications`, exact scheduling with inexact fallback when permission is unavailable, boot receiver): daily check with actions, budget thresholds, recurring/salary reminders, monthly review.
 - Scan: ML Kit on-device OCR (camera, receipt from gallery, screenshot from gallery), preprocessing, crop step, receipt + screenshot parsers, confidence, merchant mapping, duplicate detection, draft review.
+- Statement import: bank CSV from BCA, Mandiri, BNI, BRI, Jago, SeaBank, blu (parser presets + manual column mapping), entry via Lainnya → Impor Mutasi Bank (`/import`), review screen with per-row include/exclude + category, duplicate warning against existing transactions, rows post as confirmed with source `statement_import` (`lib/features/statement_import`, tests in `test/statement_import/`). PDF statements: not supported.
 - Security/reliability: PIN + biometric app lock (persistent escalating limiter, monotonic relock, FLAG_SECURE), ZIP backup/restore with manifest + checksum, schema/trigger/size validation and safety snapshot, integrity check (incl. missing/orphan attachments), local error log, backup reminder banner (>30 days or never) on Home, Lainnya and Settings. No network permissions in release.
 - Release: signed AAB/APKs (keystore in `~/finbro-keys/`), `docs/PRIVACY_POLICY.md`, `docs/PLAY_STORE.md`, CI (`.github/workflows/ci.yml`).
 
@@ -26,6 +27,8 @@ Spec: planning pack in `~/Downloads/finebro app/`. Details and decisions: `READM
 ## Change log 2 Oktober 2026
 
 All open items from the 4-agent audit closed; details in `bug.md`, `audit.md`, `CHANGELOG.md`.
+
+- Statement import (latest this session): bank CSV import wired end-to-end — route `/import` with entry in Lainnya, review screen (include/exclude, per-row category, duplicate badge, manual column mapping), commit through `LedgerService` with `sourceType: statement_import`, 6 tests (`test/statement_import/`). PDF statements remain out of scope.
 
 - Money: future-dated rows excluded from balances; Net Amount Saved = net transfers into Savings accounts only (owner decision); development allocation ignores goal adjustments; emergency average over months with history; budget end date = whole calendar day; auto-confirmed recurring delete stays deleted; form keeps attachments safe while saving.
 - Security: relock on monotonic + wall clock with a 5-minute cap for pickers/dialogs; lock blocks focus and Back; restore validates `user_version`, tables, drops triggers/views; backup size limits, unknown entries rejected, zip work off the UI isolate; CSV tab/CR neutralized.

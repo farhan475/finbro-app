@@ -8,9 +8,15 @@ Status setelah penyelesaian pekerjaan codebase: lihat item aktif di bawah. `flut
 - Backup dan restore memuat seluruh zip ke memori, sehingga batasnya 512 MB (zip), 256 MB per file, 1 GB total. Backup di atas batas ditolak saat dibuat. Untuk pengguna dengan sangat banyak lampiran perlu backup streaming (lihat roadmap).
 
 ## Belum divalidasi di perangkat
-OCR struk foto asli, TalkBack, sidik jari, notifikasi di Doze dalam/OEM lain, perilaku lock baru (tombol back, fokus keyboard, batas 5 menit file picker), backup/restore dengan batas ukuran baru.
+OCR struk foto asli, TalkBack, sidik jari, notifikasi di Doze dalam/OEM lain, perilaku lock baru (tombol back, fokus keyboard, batas 5 menit file picker), backup/restore dengan batas ukuran baru, impor mutasi CSV (picker di perangkat, parser terhadap file asli bank).
 
 ## Selesai (2 Okt 2026)
+
+### Impor mutasi bank CSV (sesi terbaru; jangan dikerjakan ulang)
+- Parser preset 7 bank (BCA, Mandiri, BNI, BRI, Jago, SeaBank, blu) + deteksi header/tanggal/amount, mapping manual bila tidak yakin (`csv_statement_parser.dart`, sudah ada sebelumnya) kini terhubung ke UI.
+- Layar tinjau `/import` (menu Lainnya → Impor Mutasi Bank): pilih akun → pilih file CSV (lock-exempt, batas 20 MB) → tinjau per baris (include/exclude, kategori per baris, badge duplikat) → impor.
+- Duplikat dicocokkan ke transaksi existing (akun sama, jumlah sama, tanggal ±2 hari, kesamaan deskripsi); baris diimpor sebagai `confirmed` dengan `sourceType: statement_import`; baris yang gagal validasi dilewati dan dihitung.
+- Test: `test/statement_import/import_service_test.dart` (4) + `import_screen_test.dart` (2). Suite penuh 253 lulus.
 
 ### Uang / ledger
 - [P1] Hapus transaksi auto-confirm recurring → instance ditutup `skipped`, tidak terposting ulang (+test).

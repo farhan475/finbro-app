@@ -20,6 +20,7 @@ FinBro adalah teman keuangan pribadi yang bekerja sepenuhnya offline. Data Anda 
 - Kalender keuangan dan pengingat catatan harian
 - Laporan: arus kas, komposisi pengeluaran, top spending, budget vs aktual
 - Scan struk dan screenshot transaksi (OCR di perangkat) — selalu berupa draf yang Anda periksa
+- Impor mutasi rekening dari file CSV bank dengan tinjauan dan peringatan duplikat
 - Backup/restore, ekspor CSV dan PDF
 - Kunci aplikasi PIN + sidik jari
 - Tema terang dan gelap

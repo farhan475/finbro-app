@@ -29,7 +29,8 @@ lib/
 │   ├── finance/    finance_math.dart (pure formulas) + FinanceService (read-side metrics)
 │   ├── notifications/, settings/, storage/, formatting/, utilities/
 ├── features/       accounts, backup, budgets, calendar, categories, dashboard, goals, onboarding,
-│                   planning, recurring, reports, scanner, security, settings, transactions
+│                   planning, recurring, reports, scanner, security, settings, statement_import,
+│                   transactions
 └── shared/         lookup providers, common widgets
 ```
 
@@ -106,5 +107,6 @@ On desktop (Linux) the app runs for development. OCR, the camera, and notificati
 | Notifications: local service, daily check, budget threshold, recurring, salary reminder, monthly review | Done (scheduling verified in code/tests; delivery needs a device) |
 | Reports: income vs expense, spending donut, top spending bar, budget vs actual, savings rate, emergency coverage, metrics panel | Done |
 | OCR: device OCR (ML Kit), preprocessing, receipt + screenshot parsers, merchant mapping, confidence UI, duplicate detection | Done (accuracy spike on a target device pending) |
+| Statement import: bank CSV (BCA/Mandiri/BNI/BRI/Jago/SeaBank/blu), review screen with per-row category + include/exclude, duplicate detection, manual column mapping | Done (CSV; PDF not supported). Tests in `test/statement_import/` |
 | Reliability: backup/export, restore/import, integrity check, app lock, local error log | Done; device performance test pending |
 | Release: seeded categories, onboarding, empty states, debug demo-data toggle, release keystore | Done; device test of OCR/crop/PDF pending |

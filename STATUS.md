@@ -3,6 +3,7 @@
 Date: 2 Oktober 2026 · Version 1.0.0+1 · `id.finbro.app`
 
 **Status:** tidak ada target rilis; app dijaga tetap siap rilis. Validasi perangkat setelah perubahan 2 Okt dan UI release terbaru belum tuntas; lihat daftar pemeriksaan dan hasil sesi di bawah.
+Sesi 2 Okt 2026 (terbaru): fitur impor mutasi bank CSV selesai end-to-end (parser, UI tinjau, duplikat, commit, route `/import`, 6 test) — tidak perlu dikerjakan ulang; lihat Roadmap untuk sisa PDF.
 
 ## Verified
 
