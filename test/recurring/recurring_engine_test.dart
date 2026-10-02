@@ -183,6 +183,18 @@ void main() {
     expect(reopened.transactionId, isNull);
   });
 
+  test('deleting an auto-confirmed transaction is not posted again by the next sync', () async {
+    now = DateTime(2026, 9, 1, 8);
+    await repo.create(salary(autoConfirm: true));
+    now = DateTime(2026, 9, 30, 10);
+    await engine.sync(now);
+    await ledger.delete((await txs()).single.id);
+
+    await engine.sync(now);
+    expect(await txs(), isEmpty);
+    expect((await instances()).first.status, RecurringStatus.skipped);
+  });
+
   test('editing a rule updates open snapshots and regenerates the schedule', () async {
     await repo.create(salary());
     final id = (await db.select(db.recurringRules).getSingle()).id;

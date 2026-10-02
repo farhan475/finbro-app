@@ -19,6 +19,7 @@ import '../../../core/utilities/app_logger.dart';
 import '../../../shared/providers/lookups.dart';
 import '../../../shared/widgets/category_icon.dart';
 import '../../../shared/widgets/fin_widgets.dart';
+import '../../security/presentation/app_lock_gate.dart';
 import '../data/attachment_repository.dart';
 import '../data/transaction_query_repository.dart';
 import '../ledger_paths.dart';
@@ -170,7 +171,10 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
     if (_picking) return;
     setState(() => _picking = true);
     try {
-      final x = await ImagePicker().pickImage(source: source, imageQuality: 85, maxWidth: 2400);
+      // The camera/gallery activity pauses the app; it must not re-lock it.
+      final x = await AppLockGate.runExempt(
+        () => ImagePicker().pickImage(source: source, imageQuality: 85, maxWidth: 2400),
+      );
       if (x == null) return;
       final draft = await AttachmentStorage.import(File(x.path), _attachmentKind);
       if (!mounted) {
@@ -210,6 +214,10 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
       return;
     }
     final isTransfer = _type == TransactionType.transfer;
+    // The save owns these files from here on: if the screen is disposed while
+    // saving, dispose must not delete files that are about to be linked.
+    final linking = List.of(_pending);
+    _pending.clear();
     final draft = TransactionDraft(
       type: _type,
       amount: parseRupiah(_amount.text) ?? 0,
@@ -220,20 +228,21 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
       note: _note.text,
       sourceType: _original?.sourceType ?? SourceType.manual,
       recurringInstanceId: _original?.recurringInstanceId,
-      attachments: List.of(_pending),
+      attachments: linking,
     );
 
     setState(() => _saving = true);
     final ledger = ref.read(ledgerServiceProvider);
+    var saved = false;
     try {
       final original = _original;
       if (original == null) {
         await ledger.create(draft);
       } else {
         await ledger.update(original.id, draft);
-        await ref.read(attachmentRepositoryProvider).remove(_removed);
       }
-      _pending.clear();
+      saved = true;
+      if (original != null) await ref.read(attachmentRepositoryProvider).remove(_removed);
       _removed.clear();
       if (!mounted) return;
       if (addAnother) {
@@ -259,6 +268,14 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
       AppLogger.error('Gagal menyimpan transaksi', e, s);
       if (mounted) showSnack(context, 'Transaksi gagal disimpan. Coba lagi.');
     } finally {
+      if (!saved) {
+        // Not linked: hand the files back to the form, or drop them if it is gone.
+        if (mounted) {
+          _pending.insertAll(0, linking);
+        } else {
+          AttachmentRepository.discardDrafts(linking);
+        }
+      }
       if (mounted) setState(() => _saving = false);
     }
   }
@@ -309,116 +326,120 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
     final isTransfer = _type == TransactionType.transfer;
     final destinationId = isTransfer ? _resolvedDestination(choices, accountId) : null;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(title),
-        actions: [
-          IconButton(
-            tooltip: 'Simpan',
-            icon: const Icon(Icons.check),
-            onPressed: _saving ? null : () => _save(choices: choices),
-          ),
-        ],
-      ),
-      body: Form(
-        key: _formKey,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-          children: [
-            _AmountInput(controller: _amount, focusNode: _amountFocus, autofocus: !widget.isEdit, type: _type),
-            const SizedBox(height: 16),
-            SegmentedButton<TransactionType>(
-              segments: const [
-                ButtonSegment(value: TransactionType.income, label: SegmentLabel('Income')),
-                ButtonSegment(value: TransactionType.expense, label: SegmentLabel('Expense')),
-                ButtonSegment(value: TransactionType.transfer, label: SegmentLabel('Transfer')),
-              ],
-              selected: {_type},
-              showSelectedIcon: false,
-              onSelectionChanged: (s) => _setType(s.first),
+    return PopScope(
+      // Leaving mid-save would race the posting; wait for it to finish.
+      canPop: !_saving,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(title),
+          actions: [
+            IconButton(
+              tooltip: 'Simpan',
+              icon: const Icon(Icons.check),
+              onPressed: _saving ? null : () => _save(choices: choices),
             ),
-            if (_original?.status == TransactionStatus.draft) ...[
-              const SizedBox(height: 12),
+          ],
+        ),
+        body: Form(
+          key: _formKey,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+            children: [
+              _AmountInput(controller: _amount, focusNode: _amountFocus, autofocus: !widget.isEdit, type: _type),
+              const SizedBox(height: 16),
+              SegmentedButton<TransactionType>(
+                segments: const [
+                  ButtonSegment(value: TransactionType.income, label: SegmentLabel('Income')),
+                  ButtonSegment(value: TransactionType.expense, label: SegmentLabel('Expense')),
+                  ButtonSegment(value: TransactionType.transfer, label: SegmentLabel('Transfer')),
+                ],
+                selected: {_type},
+                showSelectedIcon: false,
+                onSelectionChanged: (s) => _setType(s.first),
+              ),
+              if (_original?.status == TransactionStatus.draft) ...[
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    StatusBadge('Draft', color: context.fin.warning),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text('Konfirmasi dari halaman detail agar dihitung ke saldo.', style: context.text.bodySmall),
+                    ),
+                  ],
+                ),
+              ],
+              if (!isTransfer) ...[
+                const SectionHeader('Kategori'),
+                _CategoryPicker(
+                  type: _categoryType,
+                  selectedId: _categoryId,
+                  keepId: _original?.categoryId,
+                  onSelected: (id) => setState(() => _categoryId = id),
+                ),
+              ],
+              SectionHeader(isTransfer ? 'Dari account' : 'Account'),
+              _AccountPicker(
+                accounts: choices,
+                selectedId: accountId,
+                onSelected: (id) => setState(() => _accountId = id),
+              ),
+              if (isTransfer) ...[
+                const SectionHeader('Ke account'),
+                if (choices.length < 2)
+                  Text('Transfer butuh minimal dua account.', style: context.text.bodySmall)
+                else
+                  _AccountPicker(
+                    accounts: [for (final a in choices) if (a.id != accountId) a],
+                    selectedId: destinationId,
+                    onSelected: (id) => setState(() => _toAccountId = id),
+                  ),
+              ],
+              const SectionHeader('Tanggal & waktu'),
               Row(
                 children: [
-                  StatusBadge('Draft', color: context.fin.warning),
-                  const SizedBox(width: 8),
                   Expanded(
-                    child: Text('Konfirmasi dari halaman detail agar dihitung ke saldo.', style: context.text.bodySmall),
+                    child: OutlinedButton.icon(
+                      onPressed: _pickDate,
+                      icon: const Icon(Icons.calendar_today_outlined, size: 18),
+                      label: Text(formatDay(_at), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  OutlinedButton.icon(
+                    onPressed: _pickTime,
+                    icon: const Icon(Icons.schedule, size: 18),
+                    label: Text(formatTime(_at)),
                   ),
                 ],
               ),
-            ],
-            if (!isTransfer) ...[
-              const SectionHeader('Kategori'),
-              _CategoryPicker(
-                type: _categoryType,
-                selectedId: _categoryId,
-                keepId: _original?.categoryId,
-                onSelected: (id) => setState(() => _categoryId = id),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _note,
+                maxLength: 200,
+                minLines: 1,
+                maxLines: 3,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: const InputDecoration(labelText: 'Catatan (opsional)'),
               ),
-            ],
-            SectionHeader(isTransfer ? 'Dari account' : 'Account'),
-            _AccountPicker(
-              accounts: choices,
-              selectedId: accountId,
-              onSelected: (id) => setState(() => _accountId = id),
-            ),
-            if (isTransfer) ...[
-              const SectionHeader('Ke account'),
-              if (choices.length < 2)
-                Text('Transfer butuh minimal dua account.', style: context.text.bodySmall)
-              else
-                _AccountPicker(
-                  accounts: [for (final a in choices) if (a.id != accountId) a],
-                  selectedId: destinationId,
-                  onSelected: (id) => setState(() => _toAccountId = id),
-                ),
-            ],
-            const SectionHeader('Tanggal & waktu'),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _pickDate,
-                    icon: const Icon(Icons.calendar_today_outlined, size: 18),
-                    label: Text(formatDay(_at), maxLines: 1, overflow: TextOverflow.ellipsis),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                OutlinedButton.icon(
-                  onPressed: _pickTime,
-                  icon: const Icon(Icons.schedule, size: 18),
-                  label: Text(formatTime(_at)),
+              const SectionHeader('Lampiran'),
+              _attachmentSection(context),
+              const SizedBox(height: 24),
+              FilledButton(
+                onPressed: _saving ? null : () => _save(choices: choices),
+                child: _saving
+                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Text('Simpan'),
+              ),
+              if (!widget.isEdit) ...[
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  onPressed: _saving ? null : () => _save(choices: choices, addAnother: true),
+                  child: const Text('Simpan & tambah lagi'),
                 ),
               ],
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _note,
-              maxLength: 200,
-              minLines: 1,
-              maxLines: 3,
-              textCapitalization: TextCapitalization.sentences,
-              decoration: const InputDecoration(labelText: 'Catatan (opsional)'),
-            ),
-            const SectionHeader('Lampiran'),
-            _attachmentSection(context),
-            const SizedBox(height: 24),
-            FilledButton(
-              onPressed: _saving ? null : () => _save(choices: choices),
-              child: _saving
-                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Text('Simpan'),
-            ),
-            if (!widget.isEdit) ...[
-              const SizedBox(height: 12),
-              OutlinedButton(
-                onPressed: _saving ? null : () => _save(choices: choices, addAnother: true),
-                child: const Text('Simpan & tambah lagi'),
-              ),
             ],
-          ],
+          ),
         ),
       ),
     );

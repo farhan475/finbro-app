@@ -91,9 +91,9 @@ List<HealthMetric> buildHealthMetrics(FinancialMetrics m, PlanningSetting plan) 
       value: formatPercent(m.savingsRate, decimals: 1),
       benchmark: 'Rencana Savings + Emergency Fund: $savingsTarget%',
       source:
-          'Net Amount Saved ÷ Total Income × 100. Net Amount Saved = kontribusi bersih '
-          'ke goal Savings/Emergency/Development (di luar transfer ke account Savings) '
-          '+ transfer bersih ke account Savings dari account lain.',
+          'Net Amount Saved ÷ Total Income × 100. Net Amount Saved = transfer bersih '
+          'ke account Savings dari account lain. Kontribusi ke goal dihitung sebagai '
+          'progres goal, bukan tabungan, agar tidak terhitung dua kali.',
       comparison: comparePlan(m.savingsRate, savingsTarget),
       percent: m.savingsRate,
       detail: _ofIncome(m.netSaved, income),

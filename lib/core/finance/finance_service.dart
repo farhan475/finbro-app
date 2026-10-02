@@ -8,7 +8,7 @@ import '../providers.dart';
 import 'finance_math.dart';
 
 final financeServiceProvider = Provider<FinanceService>(
-  (ref) => FinanceService(ref.watch(databaseProvider)),
+  (ref) => FinanceService(ref.watch(databaseProvider), clock: ref.watch(clockProvider)),
 );
 
 class AccountBalance {
@@ -146,8 +146,9 @@ class FinancialMetrics {
 /// Read-side calculations from 03-financial-rules-and-formulas.md. Every
 /// figure is recomputed from confirmed source rows.
 class FinanceService {
-  FinanceService(this.db);
+  FinanceService(this.db, {DateTime Function()? clock}) : _clock = clock ?? DateTime.now;
   final AppDatabase db;
+  final DateTime Function() _clock;
 
   static const _confirmed = "status = 'confirmed'";
 
@@ -158,19 +159,24 @@ class FinanceService {
     return (row.data.values.first as int?) ?? 0;
   }
 
-  /// §2 Calculated Balance per account (replayed from transactions).
+  /// §2 Calculated Balance per account (replayed from transactions). Rows
+  /// dated after now (scheduled ahead) do not count until their date.
   Future<List<AccountBalance>> accountBalances({bool includeArchived = false}) async {
+    final asOf = Variable(sqlDateTime(_clock()));
     final rows = await db.customSelect(
       '''
       SELECT a.id AS id,
         a.opening_balance
         + COALESCE((SELECT SUM(CASE t.type WHEN 'income' THEN t.amount ELSE -t.amount END)
-            FROM transactions t WHERE t.account_id = a.id AND t.$_confirmed), 0)
+            FROM transactions t WHERE t.account_id = a.id AND t.$_confirmed
+              AND t.transaction_at <= ?1), 0)
         + COALESCE((SELECT SUM(t.amount) FROM transactions t
-            WHERE t.transfer_to_account_id = a.id AND t.type = 'transfer' AND t.$_confirmed), 0)
+            WHERE t.transfer_to_account_id = a.id AND t.type = 'transfer' AND t.$_confirmed
+              AND t.transaction_at <= ?1), 0)
         AS balance
       FROM accounts a
       ''',
+      variables: [asOf],
       readsFrom: {db.accounts, db.transactions},
     ).get();
     final balances = {for (final r in rows) r.read<String>('id'): r.read<int>('balance')};
@@ -294,24 +300,40 @@ class FinanceService {
   Future<int> familySupportExpense(Period p) =>
       _expenseWhere(p, "c.planning_bucket = 'family'");
 
-  /// §11 development-bucket expense + net contributions to development goals.
+  /// §11 development-bucket expense + net contributions to development goals
+  /// (manual adjustments are corrections, not allocations).
   Future<int> developmentAllocation(Period p) async {
     final spent = await _expenseWhere(p, "c.planning_bucket = 'development'");
     final contributed = await _scalar(
       '''
       SELECT COALESCE(SUM(m.amount), 0) FROM goal_movements m
       JOIN goals g ON g.id = m.goal_id
-      WHERE g.type = 'development' AND m.movement_at >= ? AND m.movement_at < ?
+      WHERE g.type = 'development' AND m.movement_type <> 'adjustment'
+        AND m.movement_at >= ? AND m.movement_at < ?
       ''',
       [sqlDateTime(p.start), sqlDateTime(p.end)],
     );
     return spent + contributed;
   }
 
-  /// §14 average essential expense over completed lookback months.
+  /// §14 average essential expense per completed month in the lookback
+  /// window. Months before the first confirmed transaction are not counted,
+  /// so a new user's average is not diluted by empty months.
   Future<double> averageEssentialMonthly(DateTime now, int lookbackMonths) async {
-    final total = await essentialExpense(Period.completedMonths(now, lookbackMonths));
-    return total / lookbackMonths;
+    if (lookbackMonths <= 0) return 0;
+    final window = Period.completedMonths(now, lookbackMonths);
+    final first = await db.customSelect(
+      'SELECT MIN(transaction_at) AS first FROM transactions WHERE $_confirmed',
+      readsFrom: {db.transactions},
+    ).getSingle();
+    final firstAt = first.readNullable<String>('first');
+    if (firstAt == null) return 0;
+    final start = monthStart(DateTime.parse(firstAt));
+    final from = start.isAfter(window.start) ? start : window.start;
+    final months = (window.end.year - from.year) * 12 + window.end.month - from.month;
+    if (months <= 0) return 0;
+    final total = await essentialExpense(Period(from, window.end));
+    return total / months;
   }
 
   /// §15 confirmed expenses that came from recurring instances.
@@ -324,41 +346,24 @@ class FinanceService {
     [sqlDateTime(p.start), sqlDateTime(p.end)],
   );
 
-  /// §8 Net Amount Saved (approved rule #12):
-  /// net contributions to savings/emergency/development goals that are not
-  /// already represented by a transfer into a savings account
-  /// + net transfers into savings-type accounts from non-savings accounts.
-  Future<int> netSaved(Period p) async {
-    final range = [sqlDateTime(p.start), sqlDateTime(p.end)];
-    final goalPart = await _scalar(
-      '''
-      SELECT COALESCE(SUM(m.amount), 0) FROM goal_movements m
-      JOIN goals g ON g.id = m.goal_id
-      LEFT JOIN transactions t ON t.id = m.transaction_id
-      LEFT JOIN accounts dst ON dst.id = t.transfer_to_account_id
-      WHERE g.type IN ('savings', 'emergency', 'development')
-        AND m.movement_type <> 'adjustment'
-        AND m.movement_at >= ? AND m.movement_at < ?
-        AND (t.id IS NULL OR dst.type IS NULL OR dst.type <> 'savings')
-      ''',
-      range,
-    );
-    final transferPart = await _scalar(
-      '''
-      SELECT COALESCE(SUM(CASE
-          WHEN dst.type = 'savings' AND src.type <> 'savings' THEN t.amount
-          WHEN src.type = 'savings' AND dst.type <> 'savings' THEN -t.amount
-          ELSE 0 END), 0)
-      FROM transactions t
-      JOIN accounts src ON src.id = t.account_id
-      JOIN accounts dst ON dst.id = t.transfer_to_account_id
-      WHERE t.type = 'transfer' AND t.$_confirmed
-        AND t.transaction_at >= ? AND t.transaction_at < ?
-      ''',
-      range,
-    );
-    return goalPart + transferPart;
-  }
+  /// §8 Net Amount Saved: net transfers into savings-type accounts from
+  /// non-savings accounts (money that actually moved). Goal contributions are
+  /// earmarks tracked as goal progress and are not counted here, so the same
+  /// money is never counted twice.
+  Future<int> netSaved(Period p) => _scalar(
+    '''
+    SELECT COALESCE(SUM(CASE
+        WHEN dst.type = 'savings' AND src.type <> 'savings' THEN t.amount
+        WHEN src.type = 'savings' AND dst.type <> 'savings' THEN -t.amount
+        ELSE 0 END), 0)
+    FROM transactions t
+    JOIN accounts src ON src.id = t.account_id
+    JOIN accounts dst ON dst.id = t.transfer_to_account_id
+    WHERE t.type = 'transfer' AND t.$_confirmed
+      AND t.transaction_at >= ? AND t.transaction_at < ?
+    ''',
+    [sqlDateTime(p.start), sqlDateTime(p.end)],
+  );
 
   Future<PlanningSetting> planningSettings() => (db.select(db.planningSettings)
         ..where((s) => s.id.equals(planningSettingsId)))
@@ -441,18 +446,22 @@ class FinanceService {
   }
 
   /// Actual expense for a budget's category within its inclusive date range.
-  Future<int> budgetActual(Budget b) => _scalar(
-    '''
-    SELECT COALESCE(SUM(amount), 0) FROM transactions
-    WHERE type = 'expense' AND $_confirmed AND category_id = ?
-      AND transaction_at >= ? AND transaction_at < ?
-    ''',
-    [
-      b.categoryId,
-      sqlDateTime(b.periodStart),
-      sqlDateTime(b.periodEnd.add(const Duration(days: 1))),
-    ],
-  );
+  Future<int> budgetActual(Budget b) {
+    final e = b.periodEnd;
+    return _scalar(
+      '''
+      SELECT COALESCE(SUM(amount), 0) FROM transactions
+      WHERE type = 'expense' AND $_confirmed AND category_id = ?
+        AND transaction_at >= ? AND transaction_at < ?
+      ''',
+      [
+        b.categoryId,
+        sqlDateTime(b.periodStart),
+        // Calendar day after the end date (a 24 h Duration is wrong across DST).
+        sqlDateTime(DateTime(e.year, e.month, e.day + 1)),
+      ],
+    );
+  }
 
   Future<FinancialMetrics> metrics(DateTime now, {Period? period}) async {
     final p = period ?? Period.month(now);

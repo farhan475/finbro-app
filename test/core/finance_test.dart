@@ -34,7 +34,7 @@ void main() {
   setUp(() async {
     db = AppDatabase.memory();
     ledger = LedgerService(db);
-    finance = FinanceService(db);
+    finance = FinanceService(db, clock: () => now);
   });
   tearDown(() => db.close());
 
@@ -220,5 +220,83 @@ void main() {
     expect(a.familyReserve, 300000); // 10% × 5.000.000 − 200.000
     expect(a.upcomingObligations, 300000);
     expect(a.value, 14800000 - 1000000 - 300000 - 300000 - 500000);
+  });
+
+  test('a future-dated transaction does not change the balance before its date', () async {
+    final bca = await account('BCA', 1000000);
+    await ledger.create(TransactionDraft(
+      type: TransactionType.expense, amount: 300000, accountId: bca,
+      categoryId: SystemCategories.food, transactionAt: DateTime(2026, 9, 20),
+    ));
+    expect(await balanceOf(bca), 1000000);
+    expect(await finance.totalBalance(), 1000000);
+
+    finance = FinanceService(db, clock: () => DateTime(2026, 9, 20, 8));
+    expect(await balanceOf(bca), 700000);
+  });
+
+  test('net saved counts transfers into savings accounts, not goal contributions', () async {
+    final bca = await account('BCA', 10000000);
+    final tabungan = await account('Tabungan', 0, type: AccountType.savings);
+    await ledger.create(TransactionDraft(
+      type: TransactionType.transfer, amount: 2000000, accountId: bca,
+      transferToAccountId: tabungan, transactionAt: now,
+    ));
+    await ledger.create(TransactionDraft(
+      type: TransactionType.transfer, amount: 500000, accountId: tabungan,
+      transferToAccountId: bca, transactionAt: now,
+    ));
+    await db.into(db.goals).insert(GoalsCompanion.insert(
+      id: 'g1', name: 'Dana Darurat', type: GoalType.emergency,
+      targetAmount: 6000000, createdAt: now, updatedAt: now,
+    ));
+    await db.into(db.goalMovements).insert(GoalMovementsCompanion.insert(
+      id: 'm1', goalId: 'g1', amount: 1500000,
+      movementType: MovementType.contribution, movementAt: now,
+    ));
+    expect(await finance.netSaved(Period.month(now)), 1500000);
+  });
+
+  test('development allocation ignores goal adjustments', () async {
+    await db.into(db.goals).insert(GoalsCompanion.insert(
+      id: 'g1', name: 'Kursus', type: GoalType.development,
+      targetAmount: 3000000, createdAt: now, updatedAt: now,
+    ));
+    for (final (id, amount, type) in [
+      ('m1', 400000, MovementType.contribution),
+      ('m2', 900000, MovementType.adjustment),
+    ]) {
+      await db.into(db.goalMovements).insert(GoalMovementsCompanion.insert(
+        id: id, goalId: 'g1', amount: amount, movementType: type, movementAt: now,
+      ));
+    }
+    expect(await finance.developmentAllocation(Period.month(now)), 400000);
+  });
+
+  test('average essential spending ignores months before the first transaction', () async {
+    final bca = await account('BCA', 50000000);
+    await ledger.create(TransactionDraft(
+      type: TransactionType.expense, amount: 3000000, accountId: bca,
+      categoryId: SystemCategories.food, transactionAt: DateTime(2026, 8, 10),
+    ));
+    expect(await finance.averageEssentialMonthly(now, 6), 3000000);
+    expect(await finance.averageEssentialMonthly(now, 0), 0);
+  });
+
+  test('a budget ending on a date includes that whole calendar day', () async {
+    final bca = await account('BCA', 5000000);
+    await db.into(db.budgets).insert(BudgetsCompanion.insert(
+      id: 'b1', categoryId: SystemCategories.food,
+      periodStart: DateTime(2026, 9, 1), periodEnd: DateTime(2026, 9, 14),
+      amount: 1000000, createdAt: now, updatedAt: now,
+    ));
+    for (final at in [DateTime(2026, 9, 14, 23, 59), DateTime(2026, 9, 15)]) {
+      await ledger.create(TransactionDraft(
+        type: TransactionType.expense, amount: 100000, accountId: bca,
+        categoryId: SystemCategories.food, transactionAt: at,
+      ));
+    }
+    final b = await (db.select(db.budgets)..where((b) => b.id.equals('b1'))).getSingle();
+    expect(await finance.budgetActual(b), 100000);
   });
 }
