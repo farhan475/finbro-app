@@ -67,6 +67,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
       if (mounted) showSnack(context, 'Backup gagal: ${e is BackupException ? e.message : e}');
       return;
     }
+    if (!mounted) return;
     ref.invalidate(localBackupsProvider);
     await _offerExternalCopy(created.package.fileName, created.package.bytes, 'application/zip');
   });
@@ -89,7 +90,15 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
 
   Future<void> _exportCsv() => _run('Menyiapkan CSV…', () async {
     final now = ref.read(clockProvider)();
-    final csv = await buildTransactionsCsv(ref.read(databaseProvider));
+    final String csv;
+    try {
+      csv = await buildTransactionsCsv(ref.read(databaseProvider));
+    } catch (e, s) {
+      AppLogger.error('Menyiapkan CSV gagal', e, s);
+      if (mounted) showSnack(context, 'Export CSV gagal: $e');
+      return;
+    }
+    if (!mounted) return;
     final name = transactionsCsvFileName(now);
     try {
       final saved = await saveExternally(name, utf8.encode(csv), 'text/csv');
@@ -132,11 +141,13 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     if (!mounted || action == null) return;
     switch (action) {
       case 'restore':
-        final bytes = await file.readAsBytes();
-        if (!mounted) return;
+        final bytes = await _readBackup(file);
+        if (bytes == null || !mounted) return;
         await restoreFromBytes(context, ref, bytes);
       case 'save':
-        await _offerExternalCopy(name, await file.readAsBytes(), 'application/zip');
+        final bytes = await _readBackup(file);
+        if (bytes == null || !mounted) return;
+        await _offerExternalCopy(name, bytes, 'application/zip');
       case 'delete':
         final ok = await confirmDialog(
           context,
@@ -145,10 +156,33 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
           confirmLabel: 'Hapus',
           destructive: true,
         );
-        if (!ok) return;
-        await file.delete();
+        if (!ok || !mounted) return;
+        try {
+          await file.delete();
+        } catch (e, s) {
+          AppLogger.error('Menghapus backup gagal', e, s);
+          if (mounted) showSnack(context, 'Gagal menghapus $name.');
+          return;
+        }
+        if (!mounted) return;
         ref.invalidate(localBackupsProvider);
-        if (mounted) showSnack(context, '$name dihapus.');
+        showSnack(context, '$name dihapus.');
+    }
+  }
+
+  /// Bytes of a local backup, or null (after telling the user) when it is
+  /// too large or cannot be read.
+  Future<Uint8List?> _readBackup(File file) async {
+    try {
+      if (await file.length() > BackupService.maxBackupBytes) {
+        if (mounted) showSnack(context, BackupService.oversizeMessage);
+        return null;
+      }
+      return await file.readAsBytes();
+    } catch (e, s) {
+      AppLogger.error('Membaca file backup gagal', e, s);
+      if (mounted) showSnack(context, 'File backup tidak dapat dibaca.');
+      return null;
     }
   }
 

@@ -1,10 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
+import 'dart:math' show min;
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart' as crypto;
-import 'package:drift/drift.dart' show Value, driftRuntimeOptions;
+import 'package:drift/backends.dart' show QueryExecutor, QueryExecutorUser;
+import 'package:drift/drift.dart' show OpeningDetails, Value, driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
@@ -90,6 +93,19 @@ class BackupService {
   static const backupPrefix = 'finbro-backup';
   static const safetyPrefix = 'safety-finbro-backup';
   static const _sqliteMagic = 'SQLite format 3\u0000';
+  static const _mb = 1024 * 1024;
+
+  /// Largest backup zip accepted for restore; checked before it is read.
+  static const maxBackupBytes = 512 * _mb;
+
+  /// Largest single zip entry (database or attachment) once unpacked.
+  static const maxEntryBytes = 256 * _mb;
+
+  /// Largest total of all zip entries once unpacked (zip-bomb guard).
+  static const maxUnpackedBytes = 1024 * _mb;
+
+  static const oversizeMessage =
+      'File backup terlalu besar (maksimal ${maxBackupBytes ~/ _mb} MB). Pilih file backup FinBro lain.';
 
   /// `finbro-backup-YYYY-MM-DD-HHmm.zip`.
   static String fileNameFor(DateTime t, {String prefix = backupPrefix}) {
@@ -98,7 +114,16 @@ class BackupService {
   }
 
   /// Consistent copy of the live DB (`VACUUM INTO`) + attachments + manifest.
-  Future<BackupPackage> buildPackage(DateTime now, {String prefix = backupPrefix}) async {
+  /// Throws [BackupException] instead of producing a package that [validate]
+  /// would reject (larger than [zipLimit], an entry larger than [entryLimit]
+  /// or all entries together larger than [totalLimit]).
+  Future<BackupPackage> buildPackage(
+    DateTime now, {
+    String prefix = backupPrefix,
+    int zipLimit = maxBackupBytes,
+    int entryLimit = maxEntryBytes,
+    int totalLimit = maxUnpackedBytes,
+  }) async {
     final work = await (await workDir()).createTemp('finbro-export-');
     try {
       final copy = File(p.join(work.path, BackupManifest.sqliteEntry));
@@ -118,9 +143,11 @@ class BackupService {
       } finally {
         await snapshot.close();
       }
-      final sqlite = await copy.readAsBytes();
 
-      final archive = Archive();
+      // local_path may come from a restored backup: only files inside the
+      // attachments directory are packed.
+      final attachmentsRoot = (await attachmentsDir()).path;
+      final entryPaths = <String, String>{};
       final entryForPath = <String, String>{};
       final usedNames = <String>{};
       final attachmentFiles = <String, String>{};
@@ -128,6 +155,10 @@ class BackupService {
         final existing = entryForPath[row.localPath];
         if (existing != null) {
           attachmentFiles[row.id] = existing;
+          continue;
+        }
+        if (!AttachmentStorage.isWithin(attachmentsRoot, row.localPath)) {
+          AppLogger.error('Backup: lampiran ${row.id} di luar penyimpanan aplikasi dilewati');
           continue;
         }
         final file = File(row.localPath);
@@ -141,30 +172,27 @@ class BackupService {
           usedNames.add(name);
         }
         final entry = '${BackupManifest.attachmentsFolder}/$name';
-        archive.add(ArchiveFile.bytes(entry, await file.readAsBytes()));
+        entryPaths[entry] = row.localPath;
         entryForPath[row.localPath] = entry;
         attachmentFiles[row.id] = entry;
       }
 
-      final manifest = BackupManifest(
-        schemaVersion: AppDatabase.currentSchemaVersion,
+      final encoded = await _encodeOffThread(
+        sqlitePath: copy.path,
+        entryPaths: entryPaths,
         createdAt: now,
         transactions: transactions,
         accounts: accounts,
         attachments: rows.length,
-        sha256: crypto.sha256.convert(sqlite).toString(),
         attachmentFiles: attachmentFiles,
+        zipLimit: zipLimit,
+        entryLimit: entryLimit,
+        totalLimit: totalLimit,
       );
-      archive
-        ..add(ArchiveFile.bytes(BackupManifest.sqliteEntry, sqlite))
-        ..add(ArchiveFile.bytes(
-          BackupManifest.entryName,
-          utf8.encode(const JsonEncoder.withIndent('  ').convert(manifest.toJson())),
-        ));
       return BackupPackage(
         fileName: fileNameFor(now, prefix: prefix),
-        bytes: ZipEncoder().encodeBytes(archive),
-        manifest: manifest,
+        bytes: encoded.bytes,
+        manifest: encoded.manifest,
       );
     } finally {
       await _deleteQuietly(work);
@@ -249,24 +277,52 @@ class BackupService {
     return snapshot;
   }
 
+  /// [validate] on a background isolate (unzipping and hashing a large
+  /// backup would freeze the UI).
+  static Future<ValidatedBackup> validateInBackground(Uint8List zipBytes) =>
+      Isolate.run(() => validate(zipBytes));
+
   /// Checks a backup zip. Throws [BackupException] with a user-facing reason
-  /// for corrupted, foreign, tampered or newer-schema backups.
+  /// for corrupted, foreign, tampered, oversized or newer-schema backups.
+  /// Only `manifest.json`, `finbro.sqlite` and `attachments/<name>` entries
+  /// are accepted; each entry is size-checked before it is unpacked.
   static ValidatedBackup validate(
     Uint8List zipBytes, {
     int currentSchemaVersion = AppDatabase.currentSchemaVersion,
+    int entryLimit = maxEntryBytes,
+    int totalLimit = maxUnpackedBytes,
   }) {
     const corrupted = BackupException('File backup rusak atau bukan file ZIP FinBro.');
+    if (zipBytes.length > maxBackupBytes) throw const BackupException(oversizeMessage);
     final Archive archive;
     try {
       archive = ZipDecoder().decodeBytes(zipBytes, verify: true);
     } catch (_) {
       throw corrupted;
     }
+    final tooLarge = BackupException(
+      'Isi backup terlalu besar untuk dipulihkan (maksimal ${entryLimit ~/ _mb} MB per file, '
+      '${totalLimit ~/ _mb} MB total).',
+    );
+    var total = 0;
+    for (final f in archive) {
+      final known = f.isFile
+          ? f.name == BackupManifest.entryName ||
+              f.name == BackupManifest.sqliteEntry ||
+              _isSafeAttachmentEntry(f.name)
+          : f.name == '${BackupManifest.attachmentsFolder}/';
+      if (!known) {
+        throw BackupException('Isi backup tidak dikenal: ${f.name}. File ini bukan backup FinBro yang valid.');
+      }
+      if (f.size < 0 || f.size > entryLimit) throw tooLarge;
+      total += f.size;
+      if (total > totalLimit) throw tooLarge;
+    }
     Uint8List? read(String name) {
       final f = archive.findFile(name);
       if (f == null || !f.isFile) return null;
       try {
-        return f.readBytes();
+        return _unpack(f);
       } catch (_) {
         throw corrupted;
       }
@@ -324,11 +380,14 @@ class BackupService {
   }
 
   /// Swaps [dbFile] (which must be closed) for the backup database:
-  /// 1. stage the sqlite in [workDir] and open it with [AppDatabase] so older
-  ///    schemas migrate and `attachments.local_path` is rewritten to files
-  ///    restored into [attachmentsDir];
-  /// 2. reject a staged DB that fails `PRAGMA integrity_check`;
-  /// 3. atomically replace [dbFile] and prune attachment files no restored
+  /// 1. stage the sqlite in [workDir] and, on a plain connection before any
+  ///    migration runs, check its `user_version` and tables and drop every
+  ///    trigger and view (the file is untrusted; see [_sanitizeStaged]);
+  /// 2. open it with [AppDatabase] so older schemas migrate and
+  ///    `attachments.local_path` is rewritten to files restored into
+  ///    [attachmentsDir];
+  /// 3. reject a staged DB that fails `PRAGMA integrity_check`;
+  /// 4. atomically replace [dbFile] and prune attachment files no restored
   ///    row references (the safety snapshot still holds the old ones).
   static Future<void> installBackup(
     ValidatedBackup backup, {
@@ -357,6 +416,12 @@ class BackupService {
       final referenced = <String>{};
       final stagedDb = _openSecondary(staged);
       try {
+        // stagedDb is not opened yet (drift opens lazily on the first query).
+        await _sanitizeStaged(
+          staged,
+          expectedTables: {for (final t in stagedDb.allTables) t.actualTableName},
+          manifestSchemaVersion: backup.manifest.schemaVersion,
+        );
         final problems = await stagedDb.integrityProblems();
         final structural = problems.where((x) => x.startsWith('integrity:')).toList();
         if (structural.isNotEmpty) {
@@ -448,6 +513,152 @@ class BackupService {
     }
   }
 
+  /// Hashes the database copy and zips it with the attachment files and the
+  /// manifest on a background isolate, refusing (before reading any file and
+  /// after encoding) a package that restore would reject. Static, so the
+  /// closure captures only these sendable values, never `this`.
+  static Future<({BackupManifest manifest, Uint8List bytes})> _encodeOffThread({
+    required String sqlitePath,
+    required Map<String, String> entryPaths,
+    required DateTime createdAt,
+    required int transactions,
+    required int accounts,
+    required int attachments,
+    required Map<String, String> attachmentFiles,
+    required int zipLimit,
+    required int entryLimit,
+    required int totalLimit,
+  }) =>
+      Isolate.run(() {
+        final tooLarge = BackupException(
+          'Backup terlalu besar untuk dipulihkan (maksimal ${zipLimit ~/ _mb} MB, '
+          '${entryLimit ~/ _mb} MB per file). Hapus lampiran lama lalu coba lagi.',
+        );
+        var total = 0;
+        void count(int size) {
+          total += size;
+          if (size > entryLimit || total > totalLimit) throw tooLarge;
+        }
+
+        count(File(sqlitePath).lengthSync());
+        for (final path in entryPaths.values) {
+          count(File(path).lengthSync());
+        }
+        final sqlite = File(sqlitePath).readAsBytesSync();
+        final manifest = BackupManifest(
+          schemaVersion: AppDatabase.currentSchemaVersion,
+          createdAt: createdAt,
+          transactions: transactions,
+          accounts: accounts,
+          attachments: attachments,
+          sha256: crypto.sha256.convert(sqlite).toString(),
+          attachmentFiles: attachmentFiles,
+        );
+        final manifestBytes = utf8.encode(const JsonEncoder.withIndent('  ').convert(manifest.toJson()));
+        count(manifestBytes.length);
+        final archive = Archive();
+        for (final e in entryPaths.entries) {
+          archive.add(ArchiveFile.bytes(e.key, File(e.value).readAsBytesSync()));
+        }
+        archive
+          ..add(ArchiveFile.bytes(BackupManifest.sqliteEntry, sqlite))
+          ..add(ArchiveFile.bytes(BackupManifest.entryName, manifestBytes));
+        final bytes = ZipEncoder().encodeBytes(archive);
+        if (bytes.length > zipLimit) throw tooLarge;
+        return (manifest: manifest, bytes: bytes);
+      });
+
+  /// Unpacks [f] without ever producing more than its declared (already
+  /// size-checked) length: an entry whose header understates its content
+  /// fails early instead of inflating without bound.
+  static Uint8List? _unpack(ArchiveFile f) {
+    final raw = f.rawContent;
+    if (raw == null) return null;
+    final input = raw.getStream(decompress: false);
+    final start = input.position;
+    final out = _BoundedBytesSink(f.size);
+    try {
+      switch (f.compression) {
+        case CompressionType.deflate:
+          final inflate = ZLibCodec(raw: true).decoder.startChunkedConversion(out);
+          while (!input.isEOS) {
+            inflate.add(input.readBytes(min(64 * 1024, input.length)).toUint8List());
+          }
+          inflate.close();
+        case CompressionType.none || null:
+          out.add(input.toUint8List());
+        case CompressionType.bzip2:
+          throw const FormatException('FinBro backups never use bzip2');
+      }
+    } finally {
+      input.setPosition(start);
+    }
+    if (out.length != f.size) throw const FormatException('Entry size does not match its header');
+    return out.takeBytes();
+  }
+
+  /// Checks the untrusted restored database on a plain connection, before
+  /// [AppDatabase] runs migrations on it:
+  /// - `user_version` must be between 1 and [AppDatabase.currentSchemaVersion]
+  ///   and equal the manifest's schema version;
+  /// - every table of the current schema must exist (all of them exist since
+  ///   schema 1; a migration that adds a table must exempt older versions
+  ///   here);
+  /// - every trigger and view is dropped: FinBro defines none, and one
+  ///   smuggled into a backup could rewrite data during migration or on any
+  ///   later write.
+  static Future<void> _sanitizeStaged(
+    File staged, {
+    required Set<String> expectedTables,
+    required int manifestSchemaVersion,
+  }) async {
+    final raw = NativeDatabase(staged, enableMigrations: false);
+    try {
+      await raw.ensureOpen(const _PlainConnection());
+      final versionRows = await raw.runSelect('PRAGMA user_version', const []);
+      final version = versionRows.isEmpty ? 0 : versionRows.first.values.first as int? ?? 0;
+      if (version < 1) {
+        throw const BackupException('Versi skema database di dalam backup tidak valid.');
+      }
+      if (version > AppDatabase.currentSchemaVersion) {
+        throw BackupException(
+          'Database di dalam backup dibuat oleh versi FinBro yang lebih baru (skema $version, '
+          'aplikasi ini skema ${AppDatabase.currentSchemaVersion}). Perbarui aplikasi sebelum restore.',
+        );
+      }
+      if (version != manifestSchemaVersion) {
+        throw BackupException(
+          'Versi skema database ($version) tidak cocok dengan manifest ($manifestSchemaVersion). '
+          'File backup rusak atau telah diubah.',
+        );
+      }
+      final schema = await raw.runSelect(
+        "SELECT type, name FROM sqlite_master WHERE type IN ('table', 'trigger', 'view')",
+        const [],
+      );
+      final tables = {for (final r in schema) if (r['type'] == 'table') r['name']};
+      final missing = expectedTables.where((t) => !tables.contains(t)).toList()..sort();
+      if (missing.isNotEmpty) {
+        throw BackupException('Database di dalam backup tidak lengkap: tabel ${missing.join(', ')} tidak ditemukan.');
+      }
+      var dropped = 0;
+      for (final r in schema) {
+        final kind = switch (r['type']) {
+          'trigger' => 'TRIGGER',
+          'view' => 'VIEW',
+          _ => null,
+        };
+        if (kind == null) continue;
+        final name = '${r['name']}'.replaceAll('"', '""');
+        await raw.runCustom('DROP $kind IF EXISTS "$name"');
+        dropped++;
+      }
+      if (dropped > 0) AppLogger.info('Restore: $dropped trigger/view dari backup dihapus');
+    } finally {
+      await raw.close();
+    }
+  }
+
   static bool _isSafeAttachmentEntry(String entry) {
     if (!entry.startsWith('${BackupManifest.attachmentsFolder}/')) return false;
     final name = entry.substring(BackupManifest.attachmentsFolder.length + 1);
@@ -462,4 +673,37 @@ class BackupService {
       if (await e.exists()) await e.delete(recursive: true);
     } catch (_) {}
   }
+}
+
+/// Opens a plain connection: no schema, no migrations.
+class _PlainConnection implements QueryExecutorUser {
+  const _PlainConnection();
+
+  @override
+  int get schemaVersion => AppDatabase.currentSchemaVersion;
+
+  @override
+  Future<void> beforeOpen(QueryExecutor executor, OpeningDetails details) async {}
+}
+
+/// Collects unpacked bytes and throws once more than [limit] arrive.
+class _BoundedBytesSink implements Sink<List<int>> {
+  _BoundedBytesSink(this.limit);
+  final int limit;
+  final _bytes = BytesBuilder(copy: false);
+
+  int get length => _bytes.length;
+
+  @override
+  void add(List<int> chunk) {
+    if (_bytes.length + chunk.length > limit) {
+      throw const FormatException('Entry is larger than its header says');
+    }
+    _bytes.add(chunk);
+  }
+
+  @override
+  void close() {}
+
+  Uint8List takeBytes() => _bytes.takeBytes();
 }

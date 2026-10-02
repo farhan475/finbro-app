@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:finbro_app/core/database/app_database.dart';
@@ -324,5 +326,128 @@ void main() {
     expect(lines, contains('2026-09-30T21:05:00,expense,25000,Food,BCA,,"Makan, ""siang""",manual,confirmed'));
     expect(lines, contains('2026-09-30T21:05:00,transfer,100000,,BCA,Cash,,manual,confirmed'));
     expect(lines, contains('2026-09-30T21:05:00,income,1500000,Salary,BCA,,"\'=HYPERLINK(""x"")",manual,confirmed'));
+    // Leading tab / carriage return also start a formula in some spreadsheets.
+    expect(csvField('\t=1+1'), "'\t=1+1");
+    expect(csvField('\r=1+1'), '"\'\r=1+1"');
+  });
+
+  /// Package whose database was changed by [mutate], with a matching hash.
+  Future<Uint8List> withMutatedDb(Future<void> Function(AppDatabase d) mutate) async {
+    final package = await service.buildPackage(now);
+    final file = File(p.join(tmp.path, 'mutate-${DateTime.now().microsecondsSinceEpoch}.sqlite'))
+      ..writeAsBytesSync(BackupService.validate(package.bytes).sqlite);
+    final d = AppDatabase(NativeDatabase(file));
+    await mutate(d);
+    await d.close();
+    final sqlite = file.readAsBytesSync();
+    return tamper(package.bytes, sqlite: sqlite, manifest: (m) => {...m, 'sha256': sha256.convert(sqlite).toString()});
+  }
+
+  test('restore rejects a database whose user_version is missing, newer or not the manifest\'s', () async {
+    await seedData();
+    final cases = {
+      0: 'tidak valid',
+      AppDatabase.currentSchemaVersion + 1: 'lebih baru',
+      AppDatabase.currentSchemaVersion - 1: 'tidak cocok dengan manifest',
+    };
+    for (final MapEntry(key: version, value: message) in cases.entries) {
+      final zip = await withMutatedDb((d) => d.customStatement('PRAGMA user_version = $version'));
+      final validated = BackupService.validate(zip);
+      final target = await Directory(p.join(tmp.path, 'v$version', 'attachments')).create(recursive: true);
+      final dbFile = File(p.join(tmp.path, 'v$version', 'finbro.sqlite'))..writeAsStringSync('old-db');
+      await expectLater(
+        BackupService.installBackup(validated, dbFile: dbFile, attachmentsDir: target, workDir: work),
+        throwsA(isA<BackupException>().having((e) => e.message, 'message', contains(message))),
+        reason: 'user_version $version',
+      );
+      expect(dbFile.readAsStringSync(), 'old-db');
+    }
+  });
+
+  test('restore drops triggers and views smuggled into the backup database', () async {
+    await seedData();
+    final zip = await withMutatedDb((d) async {
+      // Would fire when restore rewrites attachments.local_path.
+      await d.customStatement(
+        "CREATE TRIGGER evil AFTER UPDATE ON attachments BEGIN UPDATE transactions SET note = 'pwned'; END",
+      );
+      await d.customStatement('CREATE VIEW leak AS SELECT * FROM transactions');
+    });
+    final target = await Directory(p.join(tmp.path, 'd4', 'attachments')).create(recursive: true);
+    final dbFile = File(p.join(tmp.path, 'd4', 'finbro.sqlite'));
+    await BackupService.installBackup(BackupService.validate(zip),
+        dbFile: dbFile, attachmentsDir: target, workDir: work, lastBackupAt: now);
+
+    final restored = AppDatabase(NativeDatabase(dbFile));
+    addTearDown(restored.close);
+    final extras = await restored
+        .customSelect("SELECT name FROM sqlite_master WHERE type IN ('trigger', 'view')")
+        .get();
+    expect(extras, isEmpty);
+    final notes = (await restored.select(restored.transactions).get()).map((t) => t.note);
+    expect(notes, isNot(contains('pwned')));
+    expect(await count(restored, 'transactions'), 3);
+  });
+
+  test('a backup that restore would reject is never produced', () async {
+    await seedData();
+    final zip = (await service.buildPackage(now)).bytes;
+    final entries = ZipDecoder().decodeBytes(zip);
+    final largest = entries.map((f) => f.size).reduce((a, b) => a > b ? a : b);
+    final total = entries.fold(0, (sum, f) => sum + f.size);
+    final tooLarge = throwsA(isA<BackupException>().having((e) => e.message, 'message', contains('terlalu besar untuk dipulihkan')));
+
+    await expectLater(service.buildPackage(now, zipLimit: zip.length - 1), tooLarge);
+    await expectLater(service.buildPackage(now, entryLimit: largest - 1), tooLarge);
+    await expectLater(service.buildPackage(now, totalLimit: total - 1), tooLarge);
+    expect(await work.list().toList(), isEmpty, reason: 'export files cleaned up');
+
+    // Exactly at the limits the package is produced and passes validation.
+    final ok = await service.buildPackage(now, zipLimit: zip.length, entryLimit: largest, totalLimit: total);
+    expect(BackupService.validate(ok.bytes, entryLimit: largest, totalLimit: total).manifest.transactions, 3);
+  });
+
+  test('validate rejects oversized entries, understated sizes and unknown entry names', () async {
+    await seedData();
+    final zip = (await service.buildPackage(now)).bytes;
+    Matcher rejected(String text) => throwsA(isA<BackupException>().having((e) => e.message, 'message', contains(text)));
+
+    final sizes = [for (final f in ZipDecoder().decodeBytes(zip)) f.size];
+    final largest = sizes.reduce((a, b) => a > b ? a : b);
+    final total = sizes.reduce((a, b) => a + b);
+    expect(() => BackupService.validate(zip, entryLimit: largest - 1), rejected('terlalu besar'));
+    expect(() => BackupService.validate(zip, totalLimit: total - 1), rejected('terlalu besar'));
+    expect(BackupService.validate(zip, entryLimit: largest, totalLimit: total).manifest.transactions, 3);
+
+    for (final name in ['evil.sh', 'attachments/sub/x.jpg', '../finbro.sqlite']) {
+      final withExtra = ZipEncoder().encodeBytes(ZipDecoder().decodeBytes(zip)..add(ArchiveFile.string(name, 'x')));
+      expect(() => BackupService.validate(withExtra), rejected('tidak dikenal'), reason: name);
+    }
+
+    // An attachment whose zip headers claim 16 bytes but which inflates to 1 MB.
+    const bomb = 'attachments/bomb.jpg';
+    final archive = ZipDecoder().decodeBytes(tamper(zip, manifest: (m) => {
+      ...m,
+      'attachmentFiles': {...(m['attachmentFiles']! as Map), 'att-bomb': bomb},
+    }))
+      ..add(ArchiveFile.bytes(bomb, Uint8List(1024 * 1024)));
+    final bombZip = ZipEncoder().encodeBytes(archive);
+    final data = ByteData.sublistView(bombZip);
+    final nameBytes = utf8.encode(bomb);
+    bool nameAt(int at) => at + nameBytes.length <= bombZip.length &&
+        List.generate(nameBytes.length, (i) => bombZip[at + i]).join(',') == nameBytes.join(',');
+    var patched = 0;
+    for (var i = 0; i + 46 < bombZip.length; i++) {
+      final sig = data.getUint32(i, Endian.little);
+      if (sig == 0x04034b50 && nameAt(i + 30)) {
+        data.setUint32(i + 22, 16, Endian.little);
+        patched++;
+      } else if (sig == 0x02014b50 && nameAt(i + 46)) {
+        data.setUint32(i + 24, 16, Endian.little);
+        patched++;
+      }
+    }
+    expect(patched, 2);
+    expect(() => BackupService.validate(bombZip), rejected('rusak'));
   });
 }

@@ -50,10 +50,10 @@ Future<String> buildTransactionsCsv(AppDatabase db) async {
 }
 
 /// Quotes a CSV field when needed and neutralises spreadsheet formulas in
-/// free text (leading `=`, `+`, `-`, `@`).
+/// free text (leading `=`, `+`, `-`, `@`, tab or carriage return).
 String csvField(String v) {
   var s = v;
-  if (s.isNotEmpty && '=+-@'.contains(s[0])) s = "'$s";
+  if (s.isNotEmpty && '=+-@\t\r'.contains(s[0])) s = "'$s";
   if (s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r')) {
     return '"${s.replaceAll('"', '""')}"';
   }

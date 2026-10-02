@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/database/app_database.dart';
 import '../../../core/ledger/ledger_service.dart';
 import '../../../core/providers.dart';
+import '../../../core/storage/attachment_storage.dart';
 import '../../../core/utilities/app_logger.dart';
 
 final attachmentRepositoryProvider = Provider<AttachmentRepository>(
@@ -28,10 +29,15 @@ class AttachmentRepository {
   }
 
   /// Deletes private copies that were imported but never linked (form
-  /// cancelled) or whose rows were removed.
+  /// cancelled) or whose rows were removed. Paths outside the attachments
+  /// directory (e.g. from a restored backup) are never touched.
   static Future<void> deleteFiles(Iterable<String> paths) async {
     for (final path in paths) {
       try {
+        if (!await AttachmentStorage.isManaged(path)) {
+          AppLogger.info('Attachment di luar penyimpanan aplikasi tidak dihapus: $path');
+          continue;
+        }
         final f = File(path);
         if (await f.exists()) await f.delete();
       } catch (e, s) {

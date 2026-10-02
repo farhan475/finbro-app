@@ -5,11 +5,13 @@ import '../../../core/utilities/app_logger.dart';
 import '../../backup/presentation/restore_result_overlay.dart';
 import '../../settings/domain/startup_checks.dart';
 import '../domain/app_lock_service.dart';
+import '../domain/relock_timer.dart';
 import 'lock_screen.dart';
 
 /// Wraps the whole app (MaterialApp.builder, above the Navigator):
 /// - full-screen PIN/biometric lock on cold start and on resume after the
-///   configured timeout, blocking everything beneath;
+///   configured timeout, blocking everything beneath (pointer, semantics,
+///   focus and the Android back button);
 /// - marks a clean shutdown when the app is paused/detached (StartupChecks);
 /// - shows the post-restore result (its own Stack layer, not a dialog).
 class AppLockGate extends ConsumerStatefulWidget {
@@ -18,13 +20,14 @@ class AppLockGate extends ConsumerStatefulWidget {
 
   /// Runs [action] — file picker, system permission prompt, share sheet —
   /// without re-locking when the external screen it opens pauses the app.
+  /// An action that keeps the app away longer than [RelockTimer.maxExempt]
+  /// locks it when it returns.
   static Future<T> runExempt<T>(Future<T> Function() action) async {
-    _AppLockGateState._exemptDepth++;
+    _AppLockGateState._timer.beginExempt();
     try {
       return await action();
     } finally {
-      _AppLockGateState._exemptDepth--;
-      _AppLockGateState._backgroundedAt = null;
+      if (_AppLockGateState._timer.endExempt()) _AppLockGateState._relockAfterExempt();
     }
   }
 
@@ -32,38 +35,56 @@ class AppLockGate extends ConsumerStatefulWidget {
   ConsumerState<AppLockGate> createState() => _AppLockGateState();
 }
 
-class _AppLockGateState extends ConsumerState<AppLockGate> {
+class _AppLockGateState extends ConsumerState<AppLockGate> with WidgetsBindingObserver {
   // Process-wide: a provider-tree rebuild (restore) must not relock, a cold
   // start always does.
   static bool _unlocked = false;
-  static DateTime? _backgroundedAt;
-  static int _exemptDepth = 0;
+  static final _timer = RelockTimer();
+  static _AppLockGateState? _current;
 
   late final AppLifecycleListener _lifecycle;
+
+  static void _relockAfterExempt() {
+    final gate = _current;
+    if (gate != null && gate.mounted) {
+      gate._lock();
+    } else {
+      // No gate mounted right now; the next build unlocks again when no PIN
+      // is set.
+      _unlocked = false;
+    }
+  }
 
   @override
   void initState() {
     super.initState();
+    _current = this;
+    // Registered before the Router's back button dispatcher (the Router is a
+    // descendant), so [didPopRoute] sees the back button first.
+    WidgetsBinding.instance.addObserver(this);
     _lifecycle = AppLifecycleListener(
-      onHide: _onBackground,
+      onHide: _timer.background,
       onPause: () {
-        _onBackground();
+        _timer.background();
         _markClean();
       },
       onDetach: _markClean,
       onResume: _onResume,
     );
+    if (!_unlocked) FocusManager.instance.primaryFocus?.unfocus();
   }
 
   @override
   void dispose() {
+    if (identical(_current, this)) _current = null;
+    WidgetsBinding.instance.removeObserver(this);
     _lifecycle.dispose();
     super.dispose();
   }
 
-  void _onBackground() {
-    if (_exemptDepth == 0) _backgroundedAt ??= DateTime.now();
-  }
+  /// Android back while locked must not pop routes under the lock screen.
+  @override
+  Future<bool> didPopRoute() async => !_unlocked;
 
   void _markClean() {
     ref.read(startupChecksProvider).markCleanShutdown().catchError(
@@ -72,13 +93,14 @@ class _AppLockGateState extends ConsumerState<AppLockGate> {
   }
 
   void _onResume() {
-    final since = _backgroundedAt;
-    _backgroundedAt = null;
     final config = ref.read(appLockConfigProvider);
-    if (since == null || !config.pinEnabled || !_unlocked) return;
-    if (DateTime.now().difference(since).inSeconds >= config.timeoutSeconds) {
-      setState(() => _unlocked = false);
-    }
+    if (_timer.resume(Duration(seconds: config.timeoutSeconds))) _lock();
+  }
+
+  void _lock() {
+    if (!_unlocked || !ref.read(appLockConfigProvider).pinEnabled) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() => _unlocked = false);
   }
 
   Future<bool> _authenticateBiometric() =>
@@ -94,9 +116,12 @@ class _AppLockGateState extends ConsumerState<AppLockGate> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        ExcludeSemantics(
+        ExcludeFocus(
           excluding: locked,
-          child: IgnorePointer(ignoring: locked, child: widget.child),
+          child: ExcludeSemantics(
+            excluding: locked,
+            child: IgnorePointer(ignoring: locked, child: widget.child),
+          ),
         ),
         if (!locked) const RestoreResultOverlay(),
         if (locked)

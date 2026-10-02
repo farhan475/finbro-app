@@ -32,16 +32,35 @@ Future<void> pickAndRestore(BuildContext context, WidgetRef ref) async {
     return;
   }
   if (picked == null || !context.mounted) return;
-  final Uint8List bytes;
+  final Uint8List? bytes;
   try {
-    bytes = await picked.readAsBytes();
+    bytes = await _readCapped(picked, BackupService.maxBackupBytes);
   } catch (e, s) {
     AppLogger.error('Membaca file backup gagal', e, s);
     if (context.mounted) await _message(context, 'Backup ditolak', 'File tidak dapat dibaca.');
     return;
   }
   if (!context.mounted) return;
+  if (bytes == null) {
+    AppLogger.error('Backup ditolak: file melebihi ${BackupService.maxBackupBytes} byte');
+    await _message(context, 'Backup ditolak', BackupService.oversizeMessage);
+    return;
+  }
   await restoreFromBytes(context, ref, bytes);
+}
+
+/// Bytes of [file], or null when it is larger than [maxBytes]: rejected from
+/// the size the picker reports when known, otherwise while streaming, so an
+/// oversized file is never read whole into memory.
+Future<Uint8List?> _readCapped(PlatformFile file, int maxBytes) async {
+  final size = file.lengthSync();
+  if (size != null && size > maxBytes) return null;
+  final out = BytesBuilder(copy: false);
+  await for (final chunk in file.readAsByteStream()) {
+    out.add(chunk);
+    if (out.length > maxBytes) return null;
+  }
+  return out.takeBytes();
 }
 
 /// 09-security §6: validate manifest → preview → confirm → safety snapshot →
@@ -50,10 +69,14 @@ Future<void> pickAndRestore(BuildContext context, WidgetRef ref) async {
 Future<void> restoreFromBytes(BuildContext context, WidgetRef ref, Uint8List bytes) async {
   final ValidatedBackup backup;
   try {
-    backup = BackupService.validate(bytes);
+    backup = await BackupService.validateInBackground(bytes);
   } on BackupException catch (e) {
     AppLogger.error('Backup ditolak: ${e.message}');
-    await _message(context, 'Backup ditolak', e.message);
+    if (context.mounted) await _message(context, 'Backup ditolak', e.message);
+    return;
+  } catch (e, s) {
+    AppLogger.error('Memeriksa file backup gagal', e, s);
+    if (context.mounted) await _message(context, 'Backup ditolak', 'File backup tidak dapat diperiksa.');
     return;
   }
   if (!context.mounted) return;

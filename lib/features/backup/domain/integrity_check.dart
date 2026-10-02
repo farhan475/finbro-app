@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 
 import '../../../core/database/app_database.dart';
 import '../../../core/settings/app_settings_repository.dart';
+import '../../../core/storage/attachment_storage.dart';
 import '../../../core/utilities/app_logger.dart';
 
 /// app_settings key holding the latest [IntegrityReport] as JSON.
@@ -109,12 +110,17 @@ Future<IntegrityReport> runIntegrityCheck(
 Future<void> saveIntegrityReport(AppSettingsRepository settings, IntegrityReport report) =>
     settings.set(integrityReportKey, jsonEncode(report.toJson()));
 
-/// Deletes orphan files (no row references them) listed in [report].
+/// Deletes orphan files (no row references them) listed in [report]. Paths
+/// outside the attachments directory are never touched.
 Future<int> deleteOrphanFiles(IntegrityReport report) async {
   var deleted = 0;
   for (final path in report.orphanFiles) {
-    final f = File(path);
     try {
+      if (!await AttachmentStorage.isManaged(path)) {
+        AppLogger.info('File di luar penyimpanan aplikasi tidak dihapus: $path');
+        continue;
+      }
+      final f = File(path);
       if (await f.exists()) {
         await f.delete();
         deleted++;
