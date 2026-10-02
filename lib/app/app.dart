@@ -75,7 +75,10 @@ class _BootstrapState extends ConsumerState<_Bootstrap> with WidgetsBindingObser
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _runLifecycle();
+    if (state == AppLifecycleState.resumed) {
+      ref.read(timeBoundaryCheckProvider).check();
+      _runLifecycle();
+    }
   }
 
   Future<void> _runLifecycle() async {

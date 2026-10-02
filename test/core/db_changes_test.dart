@@ -1,4 +1,4 @@
-import 'package:drift/drift.dart' show TableUpdateQuery;
+import 'package:drift/drift.dart' show TableUpdateQuery, Value;
 import 'package:finbro_app/core/database/app_database.dart';
 import 'package:finbro_app/core/providers.dart';
 import 'package:finbro_app/core/settings/app_settings_repository.dart';
@@ -91,5 +91,33 @@ void main() {
     await pumpEventQueue();
     expect(writes, 3);
     expect(await settings.get(SettingKeys.themeMode), 'light');
+  });
+
+  test('a future-dated transaction ticks once its time passes (checked on resume)', () async {
+    var t = now;
+    container.dispose();
+    container = ProviderContainer(
+      overrides: [databaseProvider.overrideWithValue(db), clockProvider.overrideWithValue(() => t)],
+    );
+    await addAccount('a');
+    await db.into(db.transactions).insert(
+      TransactionsCompanion.insert(
+        id: 'tx', type: TransactionType.income, amount: 1000, accountId: 'a',
+        categoryId: const Value('sys-income-salary'),
+        transactionAt: DateTime(2026, 9, 30, 22), createdAt: now, updatedAt: now,
+      ),
+    );
+    final ticks = ticksOf(dbChangesProvider);
+    await settle();
+    final check = container.read(timeBoundaryCheckProvider);
+
+    check.check();
+    await settle();
+    expect(ticks, isEmpty);
+
+    t = DateTime(2026, 9, 30, 22, 0, 1);
+    check.check();
+    await settle();
+    expect(ticks, [1]);
   });
 }
