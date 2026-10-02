@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../app/shell.dart';
 import '../../../app/theme/app_theme.dart';
 import '../../../core/finance/finance_math.dart';
 import '../../../core/formatting/money.dart';
@@ -70,11 +71,11 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+        padding: EdgeInsets.fromLTRB(16, 4, 16, navBarClearance(context)),
         children: [
           SegmentedButton<ReportScope>(
             segments: [
-              for (final s in ReportScope.values) ButtonSegment(value: s, label: Text(s.label)),
+              for (final s in ReportScope.values) ButtonSegment(value: s, label: SegmentLabel(s.label)),
             ],
             selected: {_scope},
             showSelectedIcon: false,
@@ -175,6 +176,7 @@ class _SummarySection extends ConsumerWidget {
                   _SummaryRow(
                     label: 'Net Cash Flow',
                     value: formatRupiah(o.current.netCashFlow, signed: true),
+                    valueColor: o.current.netCashFlow < 0 ? context.fin.negative : null,
                     // Percent change of a value that can flip sign is misleading;
                     // show the absolute change instead (03 §17).
                     change: netDiff == 0 ? 'Rp 0' : formatRupiah(netDiff, signed: true),
@@ -244,6 +246,7 @@ class _SummaryRow extends StatelessWidget {
     required this.change,
     required this.caption,
     this.footnote,
+    this.valueColor,
   });
 
   final String label;
@@ -251,6 +254,9 @@ class _SummaryRow extends StatelessWidget {
   final String change;
   final String caption;
   final String? footnote;
+
+  /// Red for a negative state value (deficit); null keeps the text color.
+  final Color? valueColor;
 
   @override
   Widget build(BuildContext context) => Row(
@@ -279,7 +285,7 @@ class _SummaryRow extends StatelessWidget {
             alignment: Alignment.centerRight,
             child: Text(
               value,
-              style: context.text.titleSmall!.copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
+              style: context.text.titleSmall!.copyWith(color: valueColor, fontFeatures: const [FontFeature.tabularFigures()]),
             ),
           ),
         ),

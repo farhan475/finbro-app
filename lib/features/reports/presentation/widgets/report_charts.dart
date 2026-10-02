@@ -10,6 +10,61 @@ import '../../../../core/formatting/money.dart';
 import '../../../../shared/widgets/fin_widgets.dart';
 import '../../domain/report_shaping.dart';
 
+/// Axis-less accent line with a fading fill (Home balance card). [values]
+/// are plotted left to right; a single value is drawn as a flat line.
+class BalanceSparkline extends StatelessWidget {
+  const BalanceSparkline({super.key, required this.values, this.height = 84});
+  final List<int> values;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = context.fin.accent;
+    final v = values.isEmpty ? const [0, 0] : (values.length == 1 ? [values.first, values.first] : values);
+    final lo = v.reduce(math.min).toDouble();
+    final hi = v.reduce(math.max).toDouble();
+    final pad = hi == lo ? (hi.abs() * 0.1 + 1) : (hi - lo) * 0.15;
+    return SizedBox(
+      height: height,
+      child: ExcludeSemantics(
+        child: LineChart(
+          LineChartData(
+            minY: lo - pad,
+            maxY: hi + pad,
+            gridData: const FlGridData(show: false),
+            borderData: FlBorderData(show: false),
+            titlesData: const FlTitlesData(show: false),
+            lineTouchData: const LineTouchData(enabled: false),
+            lineBarsData: [
+              LineChartBarData(
+                spots: [for (var i = 0; i < v.length; i++) FlSpot(i.toDouble(), v[i].toDouble())],
+                color: accent,
+                barWidth: 2.2,
+                isCurved: true,
+                preventCurveOverShooting: true,
+                dotData: FlDotData(
+                  // Every third point plus the latest, as in the reference.
+                  checkToShowDot: (s, _) => s.x % 3 == 0 || s.x == v.length - 1,
+                  getDotPainter: (_, _, _, _) =>
+                      FlDotCirclePainter(radius: 2.4, color: accent, strokeWidth: 0),
+                ),
+                belowBarData: BarAreaData(
+                  show: true,
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [accent.withValues(alpha: 0.28), accent.withValues(alpha: 0)],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Legend entry: swatch (solid or dashed line) + label.
 class LegendItem {
   const LegendItem(this.label, this.color, {this.dashed = false, this.value});
@@ -34,10 +89,7 @@ class ChartLegend extends StatelessWidget {
           children: [
             _Swatch(color: i.color, dashed: i.dashed),
             const SizedBox(width: 6),
-            Text(
-              i.value == null ? i.label : '${i.label} ${i.value}',
-              style: context.text.labelMedium,
-            ),
+            Text(i.value == null ? i.label : '${i.label} ${i.value}', style: context.text.labelMedium),
           ],
         ),
     ],
@@ -81,10 +133,19 @@ class ChartEmpty extends StatelessWidget {
   );
 }
 
+/// Axis labels live in fixed reserved space; past 1.2× they overlapped and
+/// were clipped (200% font), so they stop growing there. Values stay readable
+/// in the legends/tables, which do scale.
 Widget _axisLabel(BuildContext context, TitleMeta meta, String text) => SideTitleWidget(
   meta: meta,
   space: 6,
-  child: Text(text, style: context.text.labelSmall),
+  child: Text(
+    text,
+    style: context.text.labelSmall,
+    maxLines: 1,
+    softWrap: false,
+    textScaler: MediaQuery.textScalerOf(context).clamp(maxScaleFactor: 1.2),
+  ),
 );
 
 AxisTitles get _hidden => const AxisTitles(sideTitles: SideTitles(showTitles: false));
@@ -103,7 +164,7 @@ class CashFlowLineChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fin = context.fin;
-    final incomeColor = fin.chart[0];
+    final incomeColor = fin.accent;
     final expenseColor = fin.chart[1];
     final last = points.isEmpty ? null : points.last;
     if (last == null || (last.income == 0 && last.expense == 0)) {
@@ -173,7 +234,17 @@ class CashFlowLineChart extends StatelessWidget {
                   spots: spots((p) => p.income),
                   color: incomeColor,
                   barWidth: 2.2,
+                  isCurved: true,
+                  preventCurveOverShooting: true,
                   dotData: const FlDotData(show: false),
+                  belowBarData: BarAreaData(
+                    show: true,
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [incomeColor.withValues(alpha: 0.22), incomeColor.withValues(alpha: 0)],
+                    ),
+                  ),
                 ),
                 LineChartBarData(
                   spots: spots((p) => p.expense),
@@ -205,8 +276,8 @@ class IncomeExpenseBarChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fin = context.fin;
-    final incomeColor = fin.chart[0];
-    final expenseColor = fin.chart[2];
+    final incomeColor = fin.accent;
+    final expenseColor = fin.chart[1];
     final maxRaw = points.fold<int>(0, (m, p) => math.max(m, math.max(p.income, p.expense)));
     if (maxRaw == 0) return ChartEmpty('Belum ada income atau expense pada rentang ini.', height: height);
     final maxY = niceAxisMax(maxRaw);
@@ -286,10 +357,7 @@ class IncomeExpenseBarChart extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 10),
-        ChartLegend([
-          LegendItem('Income', incomeColor),
-          LegendItem('Expense', expenseColor),
-        ]),
+        ChartLegend([LegendItem('Income', incomeColor), LegendItem('Expense', expenseColor)]),
       ],
     );
   }
@@ -469,7 +537,7 @@ class BudgetActualBars extends StatelessWidget {
                     ),
                     Text(
                       '${formatPercent(item.usage)} · ${item.status.label}',
-                      style: context.text.labelMedium!.copyWith(color: item.status.color(fin)),
+                      style: context.text.labelMedium!.copyWith(color: item.status.textColor(fin)),
                     ),
                   ],
                 ),
@@ -489,10 +557,7 @@ class BudgetActualBars extends StatelessWidget {
             ),
           ),
         const SizedBox(height: 4),
-        ChartLegend([
-          LegendItem('Budget', fin.chart[3]),
-          LegendItem('Actual', fin.chart[0]),
-        ]),
+        ChartLegend([LegendItem('Budget', fin.chart[3]), LegendItem('Actual', fin.accent)]),
       ],
     );
   }
@@ -508,7 +573,9 @@ class _LabeledBar extends StatelessWidget {
   Widget build(BuildContext context) => Row(
     children: [
       SizedBox(width: 52, child: Text(label, style: context.text.labelSmall)),
-      Expanded(child: FinProgressBar(percent: percent, color: color, height: 6)),
+      Expanded(
+        child: FinProgressBar(percent: percent, color: color, height: 6),
+      ),
     ],
   );
 }

@@ -6,7 +6,6 @@ import '../../../core/database/app_database.dart';
 import '../../../core/finance/finance_math.dart';
 import '../../../core/formatting/dates.dart';
 import '../../../core/formatting/money.dart';
-import '../../../shared/widgets/category_icon.dart';
 import '../../../shared/widgets/fin_widgets.dart';
 import '../data/goal_repository.dart';
 import '../domain/goal_math.dart';
@@ -18,6 +17,33 @@ IconData goalTypeIcon(GoalType t) => switch (t) {
   GoalType.development => Icons.trending_up,
   GoalType.custom => Icons.flag_outlined,
 };
+
+/// Goal tint from the reference: emergency green, savings amber,
+/// development monochrome (theme primary), personal targets red.
+Color goalTypeColor(GoalType t, FinColors fin) => switch (t) {
+  GoalType.emergency => fin.positive,
+  GoalType.savings => fin.warning,
+  GoalType.development => fin.primary,
+  GoalType.custom => fin.negative,
+};
+
+/// Circular goal icon on a soft tint of its type color.
+class GoalIcon extends StatelessWidget {
+  const GoalIcon(this.type, {super.key, this.size = 44});
+  final GoalType type;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = goalTypeColor(type, context.fin);
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(color: color.withValues(alpha: 0.14), shape: BoxShape.circle),
+      child: Icon(goalTypeIcon(type), size: size * 0.5, color: color),
+    );
+  }
+}
 
 /// `1,5` — one decimal, Indonesian separator.
 String formatMonths(double v) => v.toStringAsFixed(1).replaceAll('.', ',');
@@ -58,7 +84,7 @@ class GoalCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              IconAvatar(goalTypeIcon(goal.type)),
+              GoalIcon(goal.type),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(

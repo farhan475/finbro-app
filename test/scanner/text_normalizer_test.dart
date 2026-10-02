@@ -130,5 +130,18 @@ void main() {
       expect(r.date.value, DateTime(2026, 9, 24));
       expect(r.time.value, const ClockTime(19, 5));
     });
+
+    test('pickDateTime drops dates outside the review picker range', () {
+      DateTime? picked(List<String> lines) => pickDateTime(lines, now: now).date.value;
+      // OCR "98" read as 2098, and pre-2000 dates, are not proposed.
+      expect(picked(['Tanggal: 12/05/98']), isNull);
+      expect(picked(['Tanggal: 31/12/1999']), isNull);
+      expect(picked(['Tanggal: 01/10/2027']), isNull);
+      // Boundaries [2000-01-01, now + 365 days] are kept.
+      expect(picked(['Tanggal: 01/01/2000']), DateTime(2000, 1, 1));
+      expect(picked(['Tanggal: 30/09/2027']), DateTime(2027, 9, 30));
+      // An out-of-range date does not shadow a valid one further down.
+      expect(picked(['Tanggal: 12/05/98', '24/09/2026 19:05']), DateTime(2026, 9, 24));
+    });
   });
 }

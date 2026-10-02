@@ -136,6 +136,29 @@ class RecurrenceSpec {
     return list.isEmpty ? null : list.first;
   }
 
+  /// First day of the recurrence period containing [day]: its ISO week
+  /// (weekly), month (monthly), year (yearly) or, for custom rules, the
+  /// [intervalDays]-long window ending on [day]. A rule is due at most once
+  /// per period.
+  DateTime periodStart(DateTime day) {
+    final d = DateTime(day.year, day.month, day.day);
+    return switch (frequency) {
+      RecurringFrequency.weekly => _addDays(d, 1 - d.weekday),
+      RecurringFrequency.monthly => DateTime(d.year, d.month),
+      RecurringFrequency.yearly => DateTime(d.year),
+      RecurringFrequency.custom => _addDays(d, 1 - intervalDays),
+    };
+  }
+
+  /// Whether [a] and [b] fall in the same recurrence period (see
+  /// [periodStart]; custom rules: less than one interval apart).
+  bool samePeriod(DateTime a, DateTime b) => switch (frequency) {
+    RecurringFrequency.weekly => periodStart(a) == periodStart(b),
+    RecurringFrequency.monthly => a.year == b.year && a.month == b.month,
+    RecurringFrequency.yearly => a.year == b.year,
+    RecurringFrequency.custom => daysBetween(a, b).abs() < intervalDays,
+  };
+
   /// Human description, e.g. "Setiap tanggal 25", "Setiap Senin".
   String describe() => switch (frequency) {
     RecurringFrequency.weekly => 'Setiap ${weekdayNames[dayOfWeek - 1]}',

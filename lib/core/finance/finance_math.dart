@@ -26,25 +26,32 @@ enum BudgetStatus {
   final String label;
 }
 
-/// Thresholds in percentage points: default 70 / 85 / 100.
+/// Thresholds in percentage points: default 70 / 85 / 100. Compared in
+/// integers (`actual × 100` vs `threshold × budget`) so an exact hit such as
+/// 57.000 of 100.000 at 57% is never lost to floating-point rounding.
 BudgetStatus budgetStatus(
-  double usage, {
+  int actual,
+  int budget, {
   int attention = 70,
   int warning = 85,
   int over = 100,
 }) {
-  if (usage > over) return BudgetStatus.over;
-  if (usage >= over) return BudgetStatus.reached;
-  if (usage >= warning) return BudgetStatus.warning;
-  if (usage >= attention) return BudgetStatus.attention;
+  if (budget <= 0) return BudgetStatus.normal;
+  final used = actual * 100;
+  if (used > over * budget) return BudgetStatus.over;
+  if (used >= over * budget) return BudgetStatus.reached;
+  if (used >= warning * budget) return BudgetStatus.warning;
+  if (used >= attention * budget) return BudgetStatus.attention;
   return BudgetStatus.normal;
 }
 
-/// Highest threshold crossed by [usage], or null if below all of them.
-int? crossedThreshold(double usage, List<int> thresholds) {
+/// Highest threshold reached by [actual] of [budget], or null if below all
+/// of them (integer comparison, see [budgetStatus]).
+int? crossedThreshold(int actual, int budget, List<int> thresholds) {
+  if (budget <= 0) return null;
   int? hit;
   for (final t in [...thresholds]..sort()) {
-    if (usage >= t) hit = t;
+    if (actual * 100 >= t * budget) hit = t;
   }
   return hit;
 }

@@ -46,6 +46,23 @@ class Categories extends Table with _Timestamps {
   Set<Column> get primaryKey => {id};
 }
 
+// Indexes (schema v2) back the hot paths: period ranges and list ordering on
+// transaction_at, per-account balances, budget actuals per category and
+// period, and the FK lookups done on transaction/goal deletes.
+@TableIndex(name: 'transactions_transaction_at', columns: {#transactionAt})
+@TableIndex(name: 'transactions_account_id', columns: {#accountId})
+@TableIndex(
+  name: 'transactions_transfer_to_account_id',
+  columns: {#transferToAccountId},
+)
+@TableIndex(
+  name: 'transactions_category_id_transaction_at',
+  columns: {#categoryId, #transactionAt},
+)
+@TableIndex(
+  name: 'transactions_recurring_instance_id',
+  columns: {#recurringInstanceId},
+)
 @DataClassName('LedgerTransaction')
 class Transactions extends Table with _Timestamps {
   TextColumn get id => text()();
@@ -83,6 +100,8 @@ class Transactions extends Table with _Timestamps {
   ];
 }
 
+@TableIndex(name: 'attachments_transaction_id', columns: {#transactionId})
+@TableIndex(name: 'attachments_image_hash', columns: {#imageHash})
 class Attachments extends Table {
   TextColumn get id => text()();
   TextColumn get transactionId =>
@@ -146,6 +165,8 @@ class Goals extends Table with _Timestamps {
   List<String> get customConstraints => ['CHECK (target_amount > 0)'];
 }
 
+@TableIndex(name: 'goal_movements_goal_id', columns: {#goalId})
+@TableIndex(name: 'goal_movements_transaction_id', columns: {#transactionId})
 class GoalMovements extends Table {
   TextColumn get id => text()();
   TextColumn get goalId =>
@@ -214,6 +235,14 @@ class RecurringRules extends Table with _Timestamps {
   ];
 }
 
+@TableIndex(
+  name: 'recurring_instances_due_date_status',
+  columns: {#dueDate, #status},
+)
+@TableIndex(
+  name: 'recurring_instances_transaction_id',
+  columns: {#transactionId},
+)
 class RecurringInstances extends Table with _Timestamps {
   TextColumn get id => text()();
   TextColumn get recurringRuleId =>

@@ -170,7 +170,8 @@ class _RecurringFormScreenState extends ConsumerState<RecurringFormScreen> {
         message:
             'Setiap jadwal akan otomatis dicatat sebagai transaksi confirmed pada tanggal jatuh tempo '
             '(saat aplikasi dibuka), tanpa menunggu konfirmasi Anda. Saldo account langsung berubah. '
-            'Anda tetap bisa mengedit atau menghapus transaksinya.',
+            'Jadwal sebelum rule dibuat tetap menunggu konfirmasi. Anda tetap bisa mengedit atau '
+            'menghapus transaksinya; jadwal yang transaksinya dihapus dianggap dilewati.',
         confirmLabel: 'Aktifkan',
       );
       if (!ok) return;
@@ -256,8 +257,8 @@ class _RecurringFormScreenState extends ConsumerState<RecurringFormScreen> {
             const SizedBox(height: 8),
             SegmentedButton<TransactionType>(
               segments: const [
-                ButtonSegment(value: TransactionType.income, label: Text('Income'), icon: Icon(Icons.arrow_upward)),
-                ButtonSegment(value: TransactionType.expense, label: Text('Expense'), icon: Icon(Icons.arrow_downward)),
+                ButtonSegment(value: TransactionType.income, label: SegmentLabel('Income'), icon: Icon(Icons.arrow_upward)),
+                ButtonSegment(value: TransactionType.expense, label: SegmentLabel('Expense'), icon: Icon(Icons.arrow_downward)),
               ],
               selected: {_type},
               onSelectionChanged: (s) => setState(() {
@@ -354,7 +355,7 @@ class _RecurringFormScreenState extends ConsumerState<RecurringFormScreen> {
             if (_reminder) ...[
               SegmentedButton<int>(
                 segments: [
-                  for (final o in reminderOffsets) ButtonSegment(value: o, label: Text(reminderOffsetLabel(o))),
+                  for (final o in reminderOffsets) ButtonSegment(value: o, label: SegmentLabel(reminderOffsetLabel(o))),
                 ],
                 selected: {_offset},
                 onSelectionChanged: (s) => setState(() => _offset = s.first),

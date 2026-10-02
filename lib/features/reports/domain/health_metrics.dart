@@ -29,6 +29,7 @@ class HealthMetric {
     required this.source,
     this.comparison,
     this.detail,
+    this.percent,
   });
 
   final HealthMetricKind kind;
@@ -50,6 +51,10 @@ class HealthMetric {
 
   /// Underlying amounts (e.g. `Rp 1.200.000 dari Rp 5.000.000`).
   final String? detail;
+
+  /// Share for the progress bar (percent of income/budget/target), null when
+  /// the metric is an amount or not computable.
+  final double? percent;
 }
 
 /// Factual position of [value] against a planning percentage.
@@ -85,10 +90,12 @@ List<HealthMetric> buildHealthMetrics(FinancialMetrics m, PlanningSetting plan) 
       kind: HealthMetricKind.savingsRate,
       value: formatPercent(m.savingsRate, decimals: 1),
       benchmark: 'Rencana Savings + Emergency Fund: $savingsTarget%',
-      source: 'Net Amount Saved ÷ Total Income × 100. Net Amount Saved = kontribusi bersih '
+      source:
+          'Net Amount Saved ÷ Total Income × 100. Net Amount Saved = kontribusi bersih '
           'ke goal Savings/Emergency/Development (di luar transfer ke account Savings) '
           '+ transfer bersih ke account Savings dari account lain.',
       comparison: comparePlan(m.savingsRate, savingsTarget),
+      percent: m.savingsRate,
       detail: _ofIncome(m.netSaved, income),
     ),
     HealthMetric(
@@ -97,6 +104,7 @@ List<HealthMetric> buildHealthMetrics(FinancialMetrics m, PlanningSetting plan) 
       benchmark: 'Rencana Essential Spending: ${plan.essentialPercent}%',
       source: 'Expense kategori dengan sifat essential ÷ Total Income × 100.',
       comparison: comparePlan(m.essentialRatio, plan.essentialPercent),
+      percent: m.essentialRatio,
       detail: _ofIncome(m.essentialExpense, income),
     ),
     HealthMetric(
@@ -105,6 +113,7 @@ List<HealthMetric> buildHealthMetrics(FinancialMetrics m, PlanningSetting plan) 
       benchmark: 'Rencana Family Support: ${plan.familyPercent}%',
       source: 'Expense kategori planning bucket Family ÷ Total Income × 100.',
       comparison: comparePlan(m.familyRatio, plan.familyPercent),
+      percent: m.familyRatio,
       detail: _ofIncome(m.familySupport, income),
     ),
     HealthMetric(
@@ -113,11 +122,13 @@ List<HealthMetric> buildHealthMetrics(FinancialMetrics m, PlanningSetting plan) 
       benchmark: 'Rencana Development Fund: ${plan.developmentPercent}%',
       source: 'Expense bucket Development + kontribusi bersih ke goal Development ÷ Total Income × 100.',
       comparison: comparePlan(m.developmentRatio, plan.developmentPercent),
+      percent: m.developmentRatio,
       detail: _ofIncome(m.developmentAllocation, income),
     ),
     HealthMetric(
       kind: HealthMetricKind.budgetUsage,
       value: formatPercent(m.budgetUsage, decimals: 1),
+      percent: m.budgetUsage,
       benchmark: 'Batas: 100% dari total budget aktif',
       source: 'Total expense aktual kategori ber-budget ÷ total budget aktif pada bulan yang dipilih × 100.',
       comparison: switch (m.budgetUsage) {
@@ -133,19 +144,24 @@ List<HealthMetric> buildHealthMetrics(FinancialMetrics m, PlanningSetting plan) 
     HealthMetric(
       kind: HealthMetricKind.emergencyCoverage,
       value: coverage == null ? 'N/A' : formatMonths(coverage),
-      benchmark: 'Target: ${emergency.targetMonths} bulan'
+      percent: coverage == null || emergency.targetMonths == 0 ? null : coverage / emergency.targetMonths * 100,
+      benchmark:
+          'Target: ${emergency.targetMonths} bulan'
           '${emergency.targetAmount > 0 ? ' (≈ ${formatRupiah(emergency.targetAmount)})' : ''}',
-      source: 'Saldo goal Emergency aktif ÷ rata-rata expense essential '
+      source:
+          'Saldo goal Emergency aktif ÷ rata-rata expense essential '
           '${emergency.lookbackMonths} bulan penuh terakhir.',
       comparison: coverage == null
           ? null
           : (coverage >= emergency.targetMonths ? 'Mencapai target' : 'Di bawah target'),
-      detail: 'Saldo ${formatRupiah(emergency.balance)} · rata-rata essential '
+      detail:
+          'Saldo ${formatRupiah(emergency.balance)} · rata-rata essential '
           '${formatRupiah(emergency.avgEssentialMonthly.round())}/bulan',
     ),
     HealthMetric(
       kind: HealthMetricKind.recurringRatio,
       value: formatPercent(m.recurringRatio, decimals: 1),
+      percent: m.recurringRatio,
       benchmark: 'Tanpa target; menunjukkan porsi income untuk kewajiban rutin',
       source: 'Expense confirmed yang berasal dari transaksi berulang ÷ Total Income × 100.',
       detail: _ofIncome(m.recurringExpense, income),
@@ -154,10 +170,12 @@ List<HealthMetric> buildHealthMetrics(FinancialMetrics m, PlanningSetting plan) 
       kind: HealthMetricKind.availableToSpend,
       value: formatRupiah(available.value),
       benchmark: 'Acuan: ≥ Rp 0 setelah semua cadangan',
-      source: 'Total Balance − reserved (goal, sisa alokasi Family, reserve manual) '
+      source:
+          'Total Balance − reserved (goal, sisa alokasi Family, reserve manual) '
           '− upcoming obligations − minimum cash buffer.',
       comparison: available.value < 0 ? 'Cadangan melebihi saldo' : null,
-      detail: 'Total Balance ${formatRupiah(available.totalBalance)} · '
+      detail:
+          'Total Balance ${formatRupiah(available.totalBalance)} · '
           'reserved ${formatRupiah(available.reserved)} · '
           'obligations ${formatRupiah(available.upcomingObligations)} · '
           'buffer ${formatRupiah(available.minimumCashBuffer)}',

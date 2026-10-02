@@ -208,6 +208,16 @@ FieldConfidence _plausibility(DateTime date, DateTime now, FieldConfidence base)
   return base;
 }
 
+/// Range of transaction dates a scan may propose: the review's date picker
+/// bounds. OCR misreads such as `12/05/98` → 2098 fall outside and are
+/// dropped instead of becoming the transaction date.
+final scanFirstDate = DateTime(2000);
+
+DateTime scanLastDate(DateTime now) => DateTime(now.year, now.month, now.day + 365);
+
+bool _inScanRange(DateTime date, DateTime now) =>
+    !date.isBefore(scanFirstDate) && !date.isAfter(scanLastDate(now));
+
 /// Picks the transaction date/time from normalized [lines]. Lines with a
 /// date keyword win; expiry/due/birth dates are ignored.
 ({Extracted<DateTime> date, Extracted<ClockTime> time}) pickDateTime(
@@ -222,7 +232,7 @@ FieldConfidence _plausibility(DateTime date, DateTime now, FieldConfidence base)
   for (var i = 0; i < lines.length; i++) {
     final lower = lines[i].toLowerCase();
     if (ignore.any(lower.contains)) continue;
-    final dates = findDates(lines[i], now: now);
+    final dates = [for (final d in findDates(lines[i], now: now)) if (_inScanRange(d.date, now)) d];
     if (dates.isEmpty) continue;
     final hasKeyword = keyword.hasMatch(lines[i]);
     if (best == null || (hasKeyword && !bestHasKeyword)) {

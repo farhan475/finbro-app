@@ -24,6 +24,10 @@ Future<void> main() async {
     return true;
   };
 
-  await NotificationService.instance.init(onEvent: notificationEvents.add);
   runApp(const FinBroRoot());
+  // Timezone data decoding and plugin channel calls stay off the first frame;
+  // consumers wait on NotificationService.initialized.
+  WidgetsBinding.instance.addPostFrameCallback(
+    (_) => NotificationService.instance.init(onEvent: notificationEvents.add),
+  );
 }

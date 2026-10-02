@@ -23,8 +23,8 @@ class FinBroApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final settings = ref.watch(appSettingsProvider);
-    if (!settings.hasValue) {
+    final loaded = ref.watch(appSettingsProvider.select((s) => s.hasValue));
+    if (!loaded) {
       return const ColoredBox(color: Color(0xFF0B0B0B));
     }
     return MaterialApp.router(
@@ -64,8 +64,10 @@ class _BootstrapState extends ConsumerState<_Bootstrap> with WidgetsBindingObser
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _sub = notificationEvents.stream.listen(_route);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       _runLifecycle();
+      await NotificationService.instance.initialized;
+      if (!mounted) return;
       final launch = NotificationService.instance.takeLaunchEvent();
       if (launch != null) _route(launch);
     });
@@ -80,6 +82,9 @@ class _BootstrapState extends ConsumerState<_Bootstrap> with WidgetsBindingObser
     if (_running) return;
     _running = true;
     try {
+      // Scheduling and pending-request diffs need the initialized plugin.
+      await NotificationService.instance.initialized;
+      if (!mounted) return;
       final now = ref.read(clockProvider)();
       for (final task in ref.read(lifecycleTasksProvider)) {
         try {
@@ -111,7 +116,7 @@ class _BootstrapState extends ConsumerState<_Bootstrap> with WidgetsBindingObser
         final instanceId = e.data['instanceId'] as String?;
         router.push(instanceId == null ? Routes.recurring : recurringInstancePath(instanceId));
       case NotificationKind.monthlyReview:
-        router.push(Routes.reports);
+        router.go(Routes.reports);
     }
   }
 

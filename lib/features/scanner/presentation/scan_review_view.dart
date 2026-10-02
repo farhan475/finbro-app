@@ -15,6 +15,7 @@ import '../../../shared/providers/lookups.dart';
 import '../../../shared/widgets/fin_widgets.dart';
 import '../../transactions/data/transaction_query_repository.dart';
 import '../data/merchant_mapping_repository.dart';
+import '../domain/date_time_parser.dart';
 import '../domain/duplicate_detector.dart';
 import '../domain/merchant_text.dart';
 import '../domain/provider_detector.dart';
@@ -53,6 +54,10 @@ class _ScanReviewViewState extends ConsumerState<ScanReviewView> {
   String? _accountId;
   MerchantSuggestion? _suggestion;
   bool _saving = false;
+
+  /// SHA-256 of the scanned image, computed once (off the UI isolate) and
+  /// reused for duplicate detection and the attachment import.
+  String? _imageHash;
 
   /// Fields the user edited; their confidence badge no longer applies.
   final Set<String> _touched = {};
@@ -111,14 +116,16 @@ class _ScanReviewViewState extends ConsumerState<ScanReviewView> {
       _type == TransactionType.income ? CategoryType.income : CategoryType.expense;
 
   Future<void> _pickDateTime() async {
+    final now = ref.read(clockProvider)();
     final date = await showDatePicker(
       context: context,
       initialDate: _at,
-      firstDate: DateTime(2000),
-      lastDate: DateTime.now().add(const Duration(days: 365)),
+      firstDate: scanFirstDate,
+      lastDate: scanLastDate(now),
     );
     if (date == null || !mounted) return;
     final time = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(_at));
+    if (!mounted) return;
     setState(() {
       _at = DateTime(date.year, date.month, date.day, time?.hour ?? _at.hour, time?.minute ?? _at.minute);
       _touched.add('date');
@@ -140,7 +147,7 @@ class _ScanReviewViewState extends ConsumerState<ScanReviewView> {
     setState(() => _saving = true);
     try {
       final image = File(widget.imagePath);
-      final hash = await AttachmentStorage.hashFile(image);
+      final hash = _imageHash ??= await AttachmentStorage.hashFile(image);
       final merchant = _merchant.text.trim();
       final duplicates = await ref.read(duplicateDetectorProvider).find(
         amount: amount,
@@ -154,7 +161,7 @@ class _ScanReviewViewState extends ConsumerState<ScanReviewView> {
         return;
       }
 
-      final attachment = await AttachmentStorage.import(image, _p.source.attachmentKind);
+      final attachment = await AttachmentStorage.import(image, _p.source.attachmentKind, imageHash: hash);
       final reference = _p.reference.value;
       final note = [
         if (merchant.isNotEmpty) merchant,
@@ -308,7 +315,12 @@ class _ScanReviewViewState extends ConsumerState<ScanReviewView> {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    Image.file(File(widget.imagePath), fit: BoxFit.cover),
+                    Image.file(
+                      File(widget.imagePath),
+                      fit: BoxFit.cover,
+                      // Decode at screen width, not the photo's full resolution.
+                      cacheWidth: (MediaQuery.sizeOf(context).width * MediaQuery.devicePixelRatioOf(context)).round(),
+                    ),
                     Positioned(
                       right: 8,
                       bottom: 8,
@@ -338,8 +350,8 @@ class _ScanReviewViewState extends ConsumerState<ScanReviewView> {
           const SizedBox(height: 16),
           SegmentedButton<TransactionType>(
             segments: const [
-              ButtonSegment(value: TransactionType.expense, label: Text('Expense')),
-              ButtonSegment(value: TransactionType.income, label: Text('Income')),
+              ButtonSegment(value: TransactionType.expense, label: SegmentLabel('Expense')),
+              ButtonSegment(value: TransactionType.income, label: SegmentLabel('Income')),
             ],
             selected: {_type},
             onSelectionChanged: (s) => setState(() {

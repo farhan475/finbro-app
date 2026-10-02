@@ -38,7 +38,7 @@ ActivityStatus deriveActivity(int confirmedCount, ActivityStatus? stored) {
 }
 
 final calendarMonthProvider = FutureProvider.autoDispose.family<CalendarMonth, DateTime>((ref, month) async {
-  ref.watch(dbChangesProvider);
+  ref.watch(activityChangesProvider);
   final db = ref.watch(databaseProvider);
   final start = monthStart(month);
   final end = nextMonthStart(month);

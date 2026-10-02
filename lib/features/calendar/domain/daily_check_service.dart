@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -5,7 +7,8 @@ import '../../../core/database/app_database.dart';
 import '../../../core/formatting/dates.dart';
 import '../../../core/ledger/ledger_service.dart';
 import '../../../core/notifications/notification_service.dart' as notif;
-import '../../../core/notifications/notification_service.dart' show NotificationIds, NotificationKind, NotificationService;
+import '../../../core/notifications/notification_service.dart'
+    show NotificationIds, NotificationKind, NotificationService, dailyCheckPayload;
 import '../../../core/providers.dart';
 import '../../../core/settings/app_settings_repository.dart';
 import '../../recurring/domain/due_dates.dart' show daysBetween, monthNames;
@@ -65,15 +68,17 @@ class DailyCheckService {
 
   Future<void> _refreshDay(DateTime day) async {
     final counts = await confirmedTransactionCounts(db, day, DateTime(day.year, day.month, day.day + 1));
+    final row = await _row(day);
     final now = _clock();
     if ((counts[day] ?? 0) > 0) {
+      // Already ACTIVE: its daily check was cancelled when it became active.
+      if (row?.status == ActivityStatus.active) return;
       await db.into(db.dailyActivity).insertOnConflictUpdate(
         DailyActivityCompanion.insert(date: day, status: ActivityStatus.active, checkedAt: Value(now)),
       );
       await _notifications.cancelDailyCheck(day);
       return;
     }
-    final row = await _row(day);
     if (row?.status != ActivityStatus.active) return;
     await (db.update(db.dailyActivity)..where((d) => d.date.equalsValue(day))).write(
       const DailyActivityCompanion(status: Value(ActivityStatus.unknown), checkedAt: Value(null)),
@@ -101,11 +106,18 @@ class DailyCheckService {
 
   /// Schedules daily checks for today..+[dailyCheckWindowDays] on UNKNOWN
   /// dates only (others are cancelled), and the monthly review for the last
-  /// day of this and the next two months. Disabled reminders are cancelled.
+  /// day of this and the next two months. Disabled reminders, and all of
+  /// them before onboarding is done, are cancelled.
+  ///
+  /// Runs on every resume, so it diffs against the pending requests (one
+  /// plugin call) and only schedules/cancels what differs: each plugin call
+  /// rewrites the plugin's whole stored schedule on the platform thread.
   Future<void> reschedule(DateTime now) async {
     final today = dateOnly(now);
     final end = DateTime(today.year, today.month, today.day + dailyCheckWindowDays + 1);
-    final enabled = await _dailyCheckEnabled();
+    final onboarded = await settings.getBool(SettingKeys.onboardingDone);
+    final enabled = onboarded && await _dailyCheckEnabled();
+    final review = onboarded && await settings.getBool(SettingKeys.monthlyReviewEnabled, fallback: true);
     final t = await _dailyCheckTime();
     final rows = await (db.select(db.dailyActivity)
           ..where(
@@ -114,31 +126,42 @@ class DailyCheckService {
         .get();
     final status = {for (final r in rows) r.date: r.status};
     final counts = await confirmedTransactionCounts(db, today, end);
+    final pending = await _notifications.pendingPayloads();
+
+    Future<void> cancelIfPending(int id) async {
+      if (pending.containsKey(id)) await _notifications.cancel(id);
+    }
+
     for (var i = 0; i <= dailyCheckWindowDays; i++) {
       final day = DateTime(today.year, today.month, today.day + i);
       final unknown = (status[day] ?? ActivityStatus.unknown) == ActivityStatus.unknown && (counts[day] ?? 0) == 0;
       if (enabled && unknown) {
-        await _notifications.scheduleDailyCheck(day, hour: t.$1, minute: t.$2);
+        final payload = jsonEncode(dailyCheckPayload(day, hour: t.$1, minute: t.$2));
+        if (pending[NotificationIds.dailyCheck(day)] != payload) {
+          await _notifications.scheduleDailyCheck(day, hour: t.$1, minute: t.$2);
+        }
       } else {
-        await _notifications.cancelDailyCheck(day);
+        await cancelIfPending(NotificationIds.dailyCheck(day));
+        await cancelIfPending(NotificationIds.dailyCheckLater(day));
       }
     }
 
-    final review = await settings.getBool(SettingKeys.monthlyReviewEnabled, fallback: true);
     for (var k = 0; k < 3; k++) {
       final month = DateTime(today.year, today.month + k);
       final id = NotificationIds.monthlyReview(month);
       if (!review) {
-        await _notifications.cancel(id);
+        await cancelIfPending(id);
         continue;
       }
+      final payload = {'kind': NotificationKind.monthlyReview, 'month': isoDate(month).substring(0, 7)};
+      if (pending[id] == jsonEncode(payload)) continue;
       final last = monthEnd(month);
       await _notifications.schedule(
         id: id,
         at: DateTime(last.year, last.month, last.day, 19),
         title: 'Monthly review',
         body: monthlyReviewBody(month),
-        payload: {'kind': NotificationKind.monthlyReview, 'month': isoDate(month).substring(0, 7)},
+        payload: payload,
       );
     }
   }

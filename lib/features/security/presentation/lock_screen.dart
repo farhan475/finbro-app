@@ -38,6 +38,7 @@ class _LockScreenState extends ConsumerState<LockScreen> {
   @override
   void initState() {
     super.initState();
+    ref.read(appLockServiceProvider); // binds the persisted attempt limiter
     _syncCooldown();
     if (widget.biometricEnabled) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _biometric());

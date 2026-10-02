@@ -65,4 +65,36 @@ void main() {
     limiter.reset();
     expect(limiter.attemptsLeft, 5);
   });
+
+  test('cooldown escalates and survives an app restart', () async {
+    final db = AppDatabase.memory();
+    addTearDown(db.close);
+    final settings = AppSettingsRepository(db);
+    final t0 = DateTime(2026, 9, 30, 12);
+
+    final first = PinAttemptLimiter();
+    await first.bind(settings);
+    for (var i = 0; i < 5; i++) {
+      first.recordFailure(t0);
+    }
+    expect(first.remaining(t0), const Duration(seconds: 30));
+    final later = t0.add(const Duration(minutes: 2));
+    for (var i = 0; i < 5; i++) {
+      first.recordFailure(later);
+    }
+    expect(first.remaining(later), const Duration(minutes: 1), reason: 'second lockout is longer');
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    // New process: fresh limiter, same store.
+    final restarted = PinAttemptLimiter();
+    await restarted.bind(settings);
+    expect(restarted.remaining(later), const Duration(minutes: 1));
+    expect(restarted.failures, 10);
+
+    restarted.reset();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final cleared = PinAttemptLimiter();
+    await cleared.bind(settings);
+    expect(cleared.remaining(later), isNull);
+  });
 }

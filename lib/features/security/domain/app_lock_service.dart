@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:isolate';
 
 import 'package:flutter/services.dart';
@@ -43,9 +45,11 @@ final appLockConfigProvider = Provider<AppLockConfig>((ref) {
   );
 });
 
-final appLockServiceProvider = Provider<AppLockService>(
-  (ref) => AppLockService(ref.watch(appSettingsRepositoryProvider)),
-);
+final appLockServiceProvider = Provider<AppLockService>((ref) {
+  final settings = ref.watch(appSettingsRepositoryProvider);
+  PinAttemptLimiter.instance.bind(settings);
+  return AppLockService(settings);
+});
 
 /// Whether biometric unlock can be offered on this device.
 final biometricAvailableProvider = FutureProvider<bool>((ref) => AppLockService.biometricAvailable());
@@ -69,8 +73,12 @@ class AppLockService {
     }
     final salt = PinHasher.newSalt();
     final hash = await _hashOffThread(pin, salt);
-    await settings.set(SettingKeys.pinSalt, PinHasher.encodeSalt(salt));
-    await settings.set(SettingKeys.pinHash, hash);
+    // One transaction: a crash between the two writes must not leave a new
+    // salt next to the old hash (nothing would verify, permanent lockout).
+    await settings.db.transaction(() async {
+      await settings.set(SettingKeys.pinSalt, PinHasher.encodeSalt(salt));
+      await settings.set(SettingKeys.pinHash, hash);
+    });
     AppLogger.info('PIN app lock diperbarui');
   }
 
@@ -149,18 +157,51 @@ class AppLockService {
 }
 
 /// Wrong-PIN rate limit: every [maxAttempts] consecutive failures start a
-/// [cooldown]. Process-wide so the lock screen and settings share it.
+/// cooldown that grows with each lockout ([cooldowns], last one repeats).
+/// Process-wide so the lock screen and settings share it. When [bind]ed to
+/// the settings store the state survives killing the app. It uses the wall
+/// clock, so moving the device clock forward can still shorten a cooldown.
 class PinAttemptLimiter {
-  PinAttemptLimiter({this.maxAttempts = 5, this.cooldown = const Duration(seconds: 30)});
+  PinAttemptLimiter({
+    this.maxAttempts = 5,
+    this.cooldowns = const [
+      Duration(seconds: 30),
+      Duration(minutes: 1),
+      Duration(minutes: 5),
+      Duration(minutes: 15),
+      Duration(hours: 1),
+    ],
+  });
 
   static final instance = PinAttemptLimiter();
 
   final int maxAttempts;
-  final Duration cooldown;
+  final List<Duration> cooldowns;
   int _failures = 0;
   DateTime? _lockedUntil;
+  AppSettingsRepository? _store;
 
   int get failures => _failures;
+
+  /// Persists state in [store] and restores what an earlier process saved.
+  Future<void> bind(AppSettingsRepository store) async {
+    if (identical(_store, store)) return;
+    _store = store;
+    try {
+      final raw = await store.get(SettingKeys.pinLimiter);
+      if (raw == null) return;
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      final failures = (m['failures'] as num?)?.toInt() ?? 0;
+      final until = (m['until'] as num?)?.toInt();
+      if (failures > _failures) _failures = failures;
+      if (until != null) {
+        final t = DateTime.fromMillisecondsSinceEpoch(until);
+        if (_lockedUntil == null || t.isAfter(_lockedUntil!)) _lockedUntil = t;
+      }
+    } catch (e, s) {
+      AppLogger.error('Status limiter PIN tidak terbaca', e, s);
+    }
+  }
 
   /// Remaining cooldown, or null when a new attempt is allowed.
   Duration? remaining(DateTime now) {
@@ -174,11 +215,37 @@ class PinAttemptLimiter {
 
   void recordFailure(DateTime now) {
     _failures++;
-    if (_failures % maxAttempts == 0) _lockedUntil = now.add(cooldown);
+    if (_failures % maxAttempts == 0) {
+      final level = _failures ~/ maxAttempts - 1;
+      _lockedUntil = now.add(cooldowns[level < cooldowns.length ? level : cooldowns.length - 1]);
+    }
+    _persist();
   }
 
   void reset() {
+    if (_failures == 0 && _lockedUntil == null) return;
     _failures = 0;
     _lockedUntil = null;
+    _persist();
+  }
+
+  void _persist() {
+    final store = _store;
+    if (store != null) unawaited(_write(store));
+  }
+
+  Future<void> _write(AppSettingsRepository store) async {
+    try {
+      if (_failures == 0 && _lockedUntil == null) {
+        await store.remove(SettingKeys.pinLimiter);
+      } else {
+        await store.set(
+          SettingKeys.pinLimiter,
+          jsonEncode({'failures': _failures, 'until': _lockedUntil?.millisecondsSinceEpoch}),
+        );
+      }
+    } catch (e, s) {
+      AppLogger.error('Status limiter PIN gagal disimpan', e, s);
+    }
   }
 }

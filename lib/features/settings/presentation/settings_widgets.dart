@@ -48,7 +48,7 @@ class NavTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ListTile(
     leading: Icon(icon, color: context.fin.text),
-    title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+    title: Text(title, maxLines: 2, overflow: TextOverflow.ellipsis),
     subtitle: subtitle == null ? null : Text(subtitle!, maxLines: 1, overflow: TextOverflow.ellipsis),
     trailing: Icon(Icons.chevron_right, color: context.fin.muted),
     onTap: () => context.push(route),
@@ -96,7 +96,8 @@ class SettingsGroup extends ConsumerWidget {
 }
 
 /// Integrity problems (after abnormal termination/restore) and the gentle
-/// backup reminder.
+/// backup reminder. Shown on Home, More and Settings; each visible card
+/// carries its own bottom gap so callers need no conditional spacing.
 class ReliabilityBanners extends ConsumerWidget {
   const ReliabilityBanners({super.key, this.showLogAction = true});
   final bool showLogAction;
@@ -106,75 +107,79 @@ class ReliabilityBanners extends ConsumerWidget {
     final fin = context.fin;
     final report = ref.watch(integrityReportProvider);
     final remind = ref.watch(backupReminderProvider);
-    final lastBackup = DateTime.tryParse(
-      ref.watch(appSettingsProvider).value?[SettingKeys.lastBackupAt] ?? '',
-    );
+    final lastBackup = DateTime.tryParse(ref.watch(appSettingsProvider).value?[SettingKeys.lastBackupAt] ?? '');
     final days = lastBackup == null ? null : ref.watch(clockProvider)().difference(lastBackup).inDays;
     return Column(
       children: [
         if (report != null && !report.ok)
-          FinCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.warning_amber_rounded, color: fin.warning),
-                    const SizedBox(width: 8),
-                    Expanded(child: Text('Integrity check menemukan masalah', style: context.text.titleSmall)),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Dicek ${formatDay(report.checkedAt)} ${formatTime(report.checkedAt)}',
-                  style: context.text.bodySmall,
-                ),
-                const SizedBox(height: 4),
-                for (final line in report.summary.take(4)) Text('• $line', style: context.text.bodySmall),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    TextButton(
-                      onPressed: () => ref.read(startupChecksProvider).dismissReport(),
-                      style: TextButton.styleFrom(foregroundColor: fin.muted),
-                      child: const Text('Tutup'),
-                    ),
-                    if (showLogAction)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: FinCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.warning_amber_rounded, color: fin.warning),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text('Integrity check menemukan masalah', style: context.text.titleSmall)),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Dicek ${formatDay(report.checkedAt)} ${formatTime(report.checkedAt)}',
+                    style: context.text.bodySmall,
+                  ),
+                  const SizedBox(height: 4),
+                  for (final line in report.summary.take(4)) Text('• $line', style: context.text.bodySmall),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
                       TextButton(
-                        onPressed: () => context.push(Routes.log),
-                        style: TextButton.styleFrom(foregroundColor: fin.text),
-                        child: const Text('Lihat detail'),
+                        onPressed: () => ref.read(startupChecksProvider).dismissReport(),
+                        style: TextButton.styleFrom(foregroundColor: fin.muted),
+                        child: const Text('Tutup'),
                       ),
-                  ],
-                ),
-              ],
+                      if (showLogAction)
+                        TextButton(
+                          onPressed: () => context.push(Routes.log),
+                          style: TextButton.styleFrom(foregroundColor: fin.text),
+                          child: const Text('Lihat detail'),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         if (remind)
-          FinCard(
-            onTap: () => context.push(Routes.backup),
-            child: Row(
-              children: [
-                Icon(Icons.backup_outlined, color: fin.text),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        days == null ? 'Belum ada backup' : 'Backup terakhir $days hari lalu',
-                        style: context.text.titleSmall,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Data hanya tersimpan di perangkat ini. Buat backup dan simpan salinannya di tempat lain.',
-                        style: context.text.bodySmall,
-                      ),
-                    ],
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: FinCard(
+              onTap: () => context.push(Routes.backup),
+              child: Row(
+                children: [
+                  Icon(Icons.backup_outlined, color: fin.text),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          days == null ? 'Belum ada backup' : 'Backup terakhir $days hari lalu',
+                          style: context.text.titleSmall,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Data hanya tersimpan di perangkat ini. Buat backup dan simpan salinannya di tempat lain.',
+                          style: context.text.bodySmall,
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                Icon(Icons.chevron_right, color: fin.muted),
-              ],
+                  Icon(Icons.chevron_right, color: fin.muted),
+                ],
+              ),
             ),
           ),
       ],

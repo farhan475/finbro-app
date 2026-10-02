@@ -9,21 +9,38 @@ import '../../../core/finance/finance_math.dart';
 import '../../../core/finance/finance_service.dart';
 import '../../../core/formatting/money.dart';
 import '../../../core/providers.dart';
-import '../../../shared/widgets/category_icon.dart';
 import '../../../shared/widgets/fin_widgets.dart';
 import '../data/goal_repository.dart';
 import '../goal_paths.dart';
 import 'goal_widgets.dart';
 
-/// Goals tab ("Tujuan Keuangan"): Emergency Fund first, then other goals.
-class GoalsScreen extends ConsumerWidget {
+enum _GoalFilter {
+  all('Semua'),
+  active('Aktif'),
+  done('Selesai');
+
+  const _GoalFilter(this.label);
+  final String label;
+}
+
+/// "Tujuan Keuangan": Semua / Aktif / Selesai filter (reference), Emergency
+/// Fund first, then other goals. Selesai = reached 100%.
+class GoalsScreen extends ConsumerStatefulWidget {
   const GoalsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<GoalsScreen> createState() => _GoalsScreenState();
+}
+
+class _GoalsScreenState extends ConsumerState<GoalsScreen> {
+  _GoalFilter _filter = _GoalFilter.all;
+
+  @override
+  Widget build(BuildContext context) {
     final fin = context.fin;
     final goals = ref.watch(goalsProvider);
     final now = ref.watch(clockProvider)();
+    bool reached(Goal g) => g.currentAmount >= g.targetAmount;
     return Scaffold(
       appBar: AppBar(
         title: Column(
@@ -49,34 +66,66 @@ class GoalsScreen extends ConsumerWidget {
       body: AsyncView(
         value: goals,
         builder: (all) {
-          final emergency = [for (final g in all) if (g.isActive && g.type == GoalType.emergency) g];
-          final others = [for (final g in all) if (g.isActive && g.type != GoalType.emergency) g];
-          final archived = [for (final g in all) if (!g.isActive) g];
+          final emergency = [
+            for (final g in all)
+              if (g.isActive && g.type == GoalType.emergency) g,
+          ];
+          final others = [
+            for (final g in all)
+              if (g.isActive && g.type != GoalType.emergency)
+                if (_filter == _GoalFilter.all || (_filter == _GoalFilter.active) != reached(g)) g,
+          ];
+          final done = [
+            for (final g in all)
+              if (g.isActive && reached(g)) g,
+          ];
+          final archived = [
+            for (final g in all)
+              if (!g.isActive) g,
+          ];
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
             children: [
-              _EmergencyCard(goals: emergency),
-              const SizedBox(height: 8),
-              const SectionHeader('Tujuan lainnya'),
-              if (others.isEmpty)
-                const EmptyState(
-                  icon: Icons.flag_outlined,
-                  title: 'Belum ada tujuan lain',
-                  message: 'Contoh: laptop baru, liburan, atau dana pendidikan.',
-                )
-              else
-                for (final g in others) ...[
-                  GoalCard(goal: g, now: now),
-                  const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (final f in _GoalFilter.values)
+                    ChoiceChip(
+                      label: Text(f.label),
+                      selected: _filter == f,
+                      onSelected: (_) => setState(() => _filter = f),
+                    ),
                 ],
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  onPressed: () => context.push(GoalPaths.create()),
-                  icon: const Icon(Icons.add),
-                  label: const Text('Tambah Tujuan'),
-                  style: TextButton.styleFrom(foregroundColor: fin.text),
-                ),
+              ),
+              const SizedBox(height: 12),
+              if (_filter == _GoalFilter.done) ...[
+                if (done.isEmpty)
+                  const EmptyState(
+                    icon: Icons.emoji_events_outlined,
+                    title: 'Belum ada tujuan yang tercapai',
+                    message: 'Tujuan yang mencapai 100% muncul di sini.',
+                  )
+                else
+                  for (final g in done) ...[GoalCard(goal: g, now: now), const SizedBox(height: 8)],
+              ] else ...[
+                _EmergencyCard(goals: emergency),
+                const SizedBox(height: 8),
+                const SectionHeader('Tujuan lainnya'),
+                if (others.isEmpty)
+                  const EmptyState(
+                    icon: Icons.flag_outlined,
+                    title: 'Belum ada tujuan lain',
+                    message: 'Contoh: laptop baru, liburan, atau dana pendidikan.',
+                  )
+                else
+                  for (final g in others) ...[GoalCard(goal: g, now: now), const SizedBox(height: 8)],
+              ],
+              const SizedBox(height: 4),
+              OutlinedButton.icon(
+                onPressed: () => context.push(GoalPaths.create()),
+                icon: const Icon(Icons.add),
+                label: const Text('Tambah Tujuan'),
+                style: OutlinedButton.styleFrom(backgroundColor: fin.surface2, side: BorderSide.none),
               ),
               if (archived.isNotEmpty)
                 ExpansionTile(
@@ -85,10 +134,7 @@ class GoalsScreen extends ConsumerWidget {
                   collapsedShape: const Border(),
                   title: Text('Diarsipkan (${archived.length})', style: context.text.titleSmall),
                   children: [
-                    for (final g in archived) ...[
-                      GoalCard(goal: g, now: now),
-                      const SizedBox(height: 8),
-                    ],
+                    for (final g in archived) ...[GoalCard(goal: g, now: now), const SizedBox(height: 8)],
                   ],
                 ),
             ],
@@ -124,7 +170,7 @@ class _EmergencyCard extends ConsumerWidget {
             children: [
               Row(
                 children: [
-                  IconAvatar(goalTypeIcon(GoalType.emergency)),
+                  const GoalIcon(GoalType.emergency),
                   const SizedBox(width: 12),
                   Expanded(child: Text('Emergency Fund', style: context.text.titleSmall)),
                   Text(formatPercent(progress), style: context.text.titleSmall),
@@ -170,9 +216,7 @@ class _EmergencyCard extends ConsumerWidget {
                       padding: const EdgeInsets.symmetric(vertical: 6),
                       child: Row(
                         children: [
-                          Expanded(
-                            child: Text(g.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                          ),
+                          Expanded(child: Text(g.name, maxLines: 1, overflow: TextOverflow.ellipsis)),
                           const SizedBox(width: 8),
                           AmountText(g.currentAmount),
                           Icon(Icons.chevron_right, size: 18, color: fin.muted),

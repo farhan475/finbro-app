@@ -48,12 +48,13 @@ android {
 
     buildTypes {
         release {
-            // Falls back to the debug key only when key.properties is absent.
-            signingConfig = if (keystoreProperties.isNotEmpty()) {
-                signingConfigs.getByName("release")
-            } else {
-                signingConfigs.getByName("debug")
+            // Never ship a release signed with the debug key.
+            if (keystoreProperties.isEmpty() &&
+                gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }
+            ) {
+                throw GradleException("android/key.properties is missing: refusing to sign a release build with the debug key.")
             }
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

@@ -3,7 +3,7 @@ import '../core/database/enums.dart';
 /// Cross-feature route paths. Feature-internal sub-routes stay inside each
 /// feature's `*_routes.dart` under that feature's own prefix.
 abstract final class Routes {
-  // Bottom navigation: Home | Transaksi | Budget | Goals | More
+  // Bottom navigation: Home | Transaksi | Budget | Analitik (reports) | Lainnya (more)
   static const home = '/';
   static const activity = '/activity';
   static const budget = '/budget';

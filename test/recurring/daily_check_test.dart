@@ -1,9 +1,15 @@
+import 'dart:convert';
+
+import 'package:drift/drift.dart' show TableUpdateQuery;
 import 'package:finbro_app/core/database/app_database.dart';
 import 'package:finbro_app/core/database/seed.dart';
 import 'package:finbro_app/core/ledger/ledger_service.dart';
+import 'package:finbro_app/core/notifications/notification_service.dart';
 import 'package:finbro_app/core/settings/app_settings_repository.dart';
 import 'package:finbro_app/features/calendar/domain/daily_check_service.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import '../support/fake_notifications.dart';
 
 void main() {
   late AppDatabase db;
@@ -107,6 +113,78 @@ void main() {
     await expense(DateTime(2026, 9, 30, 19), status: TransactionStatus.draft);
     final counts = await confirmedTransactionCounts(db, DateTime(2026, 9, 1), DateTime(2026, 10, 1));
     expect(counts, {DateTime(2026, 9, 29): 1, today: 2});
+  });
+
+  test('a second transaction on an ACTIVE day writes no daily_activity row', () async {
+    await expense(DateTime(2026, 9, 30, 8));
+    var writes = 0;
+    final sub = db.tableUpdates(TableUpdateQuery.onTable(db.dailyActivity)).listen((_) => writes++);
+    addTearDown(sub.cancel);
+    await expense(DateTime(2026, 9, 30, 12));
+    await pumpEventQueue();
+    expect(writes, 0);
+    expect(await statusOf(today), ActivityStatus.active);
+  });
+
+  group('reschedule', () {
+    late FakeNotifications notifications;
+    late AppSettingsRepository settings;
+    late DailyCheckService service;
+    final dailyIds = [for (var i = 0; i <= dailyCheckWindowDays; i++) NotificationIds.dailyCheck(DateTime(2026, 9, 30 + i))];
+    final reviewIds = [for (var k = 0; k < 3; k++) NotificationIds.monthlyReview(DateTime(2026, 9 + k))];
+
+    setUp(() {
+      notifications = FakeNotifications();
+      settings = AppSettingsRepository(db);
+      service = DailyCheckService(db, settings, clock: () => now, notifications: notifications);
+    });
+
+    test('schedules nothing before onboarding is done', () async {
+      await service.reschedule(now);
+      expect(notifications.pluginCalls, 0);
+    });
+
+    test('only schedules or cancels what differs from the pending set', () async {
+      await settings.setBool(SettingKeys.onboardingDone, true);
+      await service.reschedule(now);
+      expect(notifications.scheduled, [...dailyIds, ...reviewIds]);
+      expect(notifications.cancelled, isEmpty);
+
+      // Unchanged inputs: a resume costs no plugin calls.
+      notifications.resetCalls();
+      await service.reschedule(now);
+      expect(notifications.pluginCalls, 0);
+
+      // New time: every daily check is replaced, monthly reviews stay.
+      notifications.resetCalls();
+      await settings.set(SettingKeys.dailyCheckTime, '07:15');
+      await service.reschedule(now);
+      expect(notifications.scheduled, dailyIds);
+      expect(notifications.cancelled, isEmpty);
+      expect(
+        notifications.pending[NotificationIds.dailyCheck(today)],
+        jsonEncode(dailyCheckPayload(today, hour: 7, minute: 15)),
+      );
+
+      // A day that became NO_ACTIVITY elsewhere: only its pending id is cancelled.
+      notifications.resetCalls();
+      final tomorrow = DateTime(2026, 10, 1);
+      await db.into(db.dailyActivity).insert(
+        DailyActivityCompanion.insert(date: tomorrow, status: ActivityStatus.noActivity),
+      );
+      await service.reschedule(now);
+      expect(notifications.scheduled, isEmpty);
+      expect(notifications.cancelled, [NotificationIds.dailyCheck(tomorrow)]);
+
+      // Disabling cancels exactly the pending ones.
+      notifications.resetCalls();
+      await settings.setBool(SettingKeys.dailyCheckEnabled, false);
+      await settings.setBool(SettingKeys.monthlyReviewEnabled, false);
+      await service.reschedule(now);
+      expect(notifications.scheduled, isEmpty);
+      expect(notifications.cancelled.toSet(), {...dailyIds, ...reviewIds}..remove(NotificationIds.dailyCheck(tomorrow)));
+      expect(notifications.pending, isEmpty);
+    });
   });
 
   test('monthly review body names the month', () {

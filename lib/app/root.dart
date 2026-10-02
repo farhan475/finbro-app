@@ -48,15 +48,17 @@ class _FinBroRootState extends State<FinBroRoot> {
   Future<void> _replace(Future<void> Function(File dbFile) replace) async {
     final old = _db;
     setState(() => _db = null);
-    await old?.close();
     try {
+      await old?.close();
       await replace(await databaseFile());
     } catch (e, s) {
       AppLogger.error('Penggantian database gagal', e, s);
-      await _open();
       rethrow;
+    } finally {
+      // Reopen even when closing the old connection failed, so the app never
+      // stays on the blank placeholder.
+      await _open();
     }
-    await _open();
   }
 
   @override

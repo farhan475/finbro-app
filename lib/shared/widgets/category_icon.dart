@@ -47,20 +47,22 @@ IconData accountTypeIcon(AccountType t) => switch (t) {
   AccountType.other => Icons.wallet_outlined,
 };
 
-/// Circular monochrome icon avatar used in lists.
+/// Rounded-square icon tile used in lists. [filled] is the solid
+/// primary tile of the reference budget list.
 class IconAvatar extends StatelessWidget {
-  const IconAvatar(this.icon, {super.key, this.size = 40});
+  const IconAvatar(this.icon, {super.key, this.size = 40, this.filled = false});
   final IconData icon;
   final double size;
+  final bool filled;
 
   @override
   Widget build(BuildContext context) => Container(
     width: size,
     height: size,
     decoration: BoxDecoration(
-      color: context.fin.surface2,
+      color: filled ? context.fin.primary : context.fin.surface2,
       borderRadius: BorderRadius.circular(size * 0.32),
     ),
-    child: Icon(icon, size: size * 0.5, color: context.fin.text),
+    child: Icon(icon, size: size * 0.5, color: filled ? context.fin.onPrimary : context.fin.text),
   );
 }

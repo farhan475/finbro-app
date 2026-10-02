@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/routes.dart';
+import '../../../app/shell.dart';
 import '../../../app/theme/app_theme.dart';
 import '../../../core/finance/finance_math.dart';
 import '../../../core/finance/finance_service.dart';
@@ -62,7 +63,7 @@ class _BudgetScreenState extends ConsumerState<BudgetScreen> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+        padding: EdgeInsets.fromLTRB(16, 0, 16, navBarClearance(context)),
         children: [
           Align(
             alignment: Alignment.centerLeft,
@@ -138,7 +139,7 @@ class _BudgetSummary extends StatelessWidget {
     final total = items.fold<int>(0, (s, i) => s + i.budget.amount);
     final used = items.fold<int>(0, (s, i) => s + i.actual);
     final usage = budgetUsage(used, total);
-    final status = budgetStatus(usage);
+    final status = budgetStatus(used, total);
     return FinCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -157,7 +158,7 @@ class _BudgetSummary extends StatelessWidget {
                 child: Text(
                   '${formatPercent(usage)} terpakai · ${status.label}',
                   style: context.text.bodySmall,
-                  maxLines: 1,
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -195,7 +196,7 @@ class _BudgetTile extends StatelessWidget {
         children: [
           Row(
             children: [
-              IconAvatar(iconFor(item.category.icon)),
+              IconAvatar(iconFor(item.category.icon), filled: true),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -211,7 +212,7 @@ class _BudgetTile extends StatelessWidget {
                     Text(
                       '${formatRupiah(item.actual)} / ${formatRupiah(item.budget.amount)}',
                       style: context.text.bodySmall!.copyWith(color: fin.muted),
-                      maxLines: 1,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ],
@@ -223,7 +224,7 @@ class _BudgetTile extends StatelessWidget {
                 children: [
                   Text(formatPercent(item.usage), style: context.text.titleSmall),
                   const SizedBox(height: 2),
-                  Text(status.label, style: context.text.labelSmall!.copyWith(color: color)),
+                  Text(status.label, style: context.text.labelSmall!.copyWith(color: status.textColor(fin))),
                 ],
               ),
             ],

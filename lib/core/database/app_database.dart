@@ -43,8 +43,9 @@ class AppDatabase extends _$AppDatabase {
   /// In-memory database for tests and fixtures.
   factory AppDatabase.memory() => AppDatabase(NativeDatabase.memory());
 
-  /// Bump together with a new `from == N` step in [migration].
-  static const int currentSchemaVersion = 1;
+  /// Bump together with a new `if (from < N)` step in [migration], then dump
+  /// the schema into `drift_schemas/` (see CHANGELOG release policy).
+  static const int currentSchemaVersion = 2;
 
   @override
   int get schemaVersion => currentSchemaVersion;
@@ -56,11 +57,31 @@ class AppDatabase extends _$AppDatabase {
       await seedDefaults(this);
     },
     onUpgrade: (m, from, to) async {
-      // Stepwise migrations go here, e.g.
-      // if (from < 2) await m.addColumn(accounts, accounts.someColumn);
+      // Each step lists its own entities so later versions cannot change
+      // what an older step creates.
+      if (from < 2) {
+        for (final index in [
+          transactionsTransactionAt,
+          transactionsAccountId,
+          transactionsTransferToAccountId,
+          transactionsCategoryIdTransactionAt,
+          transactionsRecurringInstanceId,
+          attachmentsTransactionId,
+          attachmentsImageHash,
+          goalMovementsGoalId,
+          goalMovementsTransactionId,
+          recurringInstancesDueDateStatus,
+          recurringInstancesTransactionId,
+        ]) {
+          await m.create(index);
+        }
+      }
     },
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');
+      // Wait for a competing connection (notification background isolate,
+      // backup/restore) instead of failing immediately with SQLITE_BUSY.
+      await customStatement('PRAGMA busy_timeout = 5000');
     },
   );
 

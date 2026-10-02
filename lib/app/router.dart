@@ -11,6 +11,7 @@ import '../features/goals/presentation/goals_screen.dart';
 import '../features/recurring/recurring_routes.dart';
 import '../features/reports/reports_routes.dart';
 import '../features/scanner/scanner_routes.dart';
+import '../features/reports/presentation/reports_screen.dart';
 import '../features/settings/presentation/more_screen.dart';
 import '../features/settings/settings_routes.dart';
 import '../features/transactions/presentation/activity_screen.dart';
@@ -20,14 +21,18 @@ import 'shell.dart';
 
 final rootNavigatorKey = GlobalKey<NavigatorState>();
 
-/// Notifies go_router when onboarding state changes.
-class _SettingsListenable extends ChangeNotifier {
+/// Notifies go_router when the onboarding state changes.
+class _OnboardingListenable extends ChangeNotifier {
   void ping() => notifyListeners();
 }
 
+/// `null` while settings load, then whether onboarding is done.
+bool? _onboardingDone(AsyncValue<Map<String, String>> s) =>
+    s.hasValue ? s.value![SettingKeys.onboardingDone] == 'true' : null;
+
 final routerProvider = Provider<GoRouter>((ref) {
-  final listenable = _SettingsListenable();
-  ref.listen(appSettingsProvider, (_, _) => listenable.ping());
+  final listenable = _OnboardingListenable();
+  ref.listen(appSettingsProvider.select(_onboardingDone), (_, _) => listenable.ping());
   ref.onDispose(listenable.dispose);
 
   final router = GoRouter(
@@ -35,9 +40,8 @@ final routerProvider = Provider<GoRouter>((ref) {
     initialLocation: Routes.home,
     refreshListenable: listenable,
     redirect: (context, state) {
-      final settings = ref.read(appSettingsProvider);
-      if (!settings.hasValue) return null;
-      final done = settings.value![SettingKeys.onboardingDone] == 'true';
+      final done = _onboardingDone(ref.read(appSettingsProvider));
+      if (done == null) return null;
       final atOnboarding = state.matchedLocation == Routes.onboarding;
       if (!done && !atOnboarding) return Routes.onboarding;
       if (done && atOnboarding) return Routes.home;
@@ -50,10 +54,11 @@ final routerProvider = Provider<GoRouter>((ref) {
           StatefulShellBranch(routes: [GoRoute(path: Routes.home, builder: (_, _) => const HomeScreen())]),
           StatefulShellBranch(routes: [GoRoute(path: Routes.activity, builder: (_, _) => const ActivityScreen())]),
           StatefulShellBranch(routes: [GoRoute(path: Routes.budget, builder: (_, _) => const BudgetScreen())]),
-          StatefulShellBranch(routes: [GoRoute(path: Routes.goals, builder: (_, _) => const GoalsScreen())]),
+          StatefulShellBranch(routes: [GoRoute(path: Routes.reports, builder: (_, _) => const ReportsScreen())]),
           StatefulShellBranch(routes: [GoRoute(path: Routes.more, builder: (_, _) => const MoreScreen())]),
         ],
       ),
+      GoRoute(path: Routes.goals, builder: (_, _) => const GoalsScreen()),
       ...transactionsRoutes,
       ...budgetsRoutes,
       ...recurringRoutes,

@@ -202,8 +202,8 @@ class _CategoryFormScreenState extends ConsumerState<CategoryFormScreen> {
             else
               SegmentedButton<CategoryType>(
                 segments: const [
-                  ButtonSegment(value: CategoryType.expense, label: Text('Expense')),
-                  ButtonSegment(value: CategoryType.income, label: Text('Income')),
+                  ButtonSegment(value: CategoryType.expense, label: SegmentLabel('Expense')),
+                  ButtonSegment(value: CategoryType.income, label: SegmentLabel('Income')),
                 ],
                 selected: {_type},
                 showSelectedIcon: false,
@@ -224,7 +224,7 @@ class _CategoryFormScreenState extends ConsumerState<CategoryFormScreen> {
               const SectionHeader('Sifat pengeluaran'),
               SegmentedButton<ExpenseNature>(
                 segments: [
-                  for (final n in ExpenseNature.values) ButtonSegment(value: n, label: Text(expenseNatureLabel(n))),
+                  for (final n in ExpenseNature.values) ButtonSegment(value: n, label: SegmentLabel(expenseNatureLabel(n))),
                 ],
                 selected: {?_nature},
                 emptySelectionAllowed: true,

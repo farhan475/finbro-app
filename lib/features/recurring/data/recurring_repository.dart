@@ -172,12 +172,14 @@ class RecurringRepository {
     return id;
   }
 
-  /// Saves an edit and regenerates future open instances (amount snapshots
-  /// of open instances follow the new amount).
+  /// Saves an edit and regenerates open instances (amount snapshots of open
+  /// instances follow the new amount). The current period keeps one
+  /// obligation; periods already settled get no second one.
   Future<void> update(String id, RecurringRuleDraft d) async {
     await _validate(d, ruleId: id);
     final now = _clock();
-    await (db.update(db.recurringRules)..where((r) => r.id.equals(id))).write(
+    await engine.updateRule(
+      id,
       RecurringRulesCompanion(
         type: Value(d.type),
         name: Value(d.name.trim()),
@@ -197,26 +199,21 @@ class RecurringRepository {
         autoConfirm: Value(d.autoConfirm),
         updatedAt: Value(now),
       ),
+      now,
     );
-    await engine.regenerateRule(id, now);
   }
 
   /// Deactivating removes open instances from today on; history stays.
-  /// Reactivating schedules again from today (no backfill).
+  /// Reactivating schedules again from the current period (no older
+  /// backfill).
   Future<void> setActive(String id, bool active) async {
     final now = _clock();
-    await (db.update(db.recurringRules)..where((r) => r.id.equals(id))).write(
-      RecurringRulesCompanion(active: Value(active), updatedAt: Value(now)),
-    );
-    await engine.regenerateRule(id, now);
+    await engine.updateRule(id, RecurringRulesCompanion(active: Value(active), updatedAt: Value(now)), now);
   }
 
   /// Deletes the rule: open instances and their reminders are cancelled.
   /// Confirmed transactions stay in the ledger.
-  Future<void> delete(String id) async {
-    await engine.cancelRuleReminders(id);
-    await (db.delete(db.recurringRules)..where((r) => r.id.equals(id))).go();
-  }
+  Future<void> delete(String id) => engine.deleteRule(id);
 
   Future<List<RuleOverview>> overview() async {
     final rules = await (db.select(db.recurringRules)

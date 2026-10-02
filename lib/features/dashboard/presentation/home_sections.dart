@@ -16,37 +16,6 @@ import '../../../shared/widgets/transaction_tile.dart';
 import '../../reports/presentation/widgets/report_charts.dart';
 import '../data/dashboard_providers.dart';
 
-/// Current-month cumulative income vs expense with net cash flow.
-class CashFlowCard extends ConsumerWidget {
-  const CashFlowCard({super.key});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final now = ref.watch(clockProvider)();
-    final month = ref.watch(homeOverviewProvider).value?.month;
-    return FinCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (month != null) ...[
-            Row(
-              children: [
-                Expanded(child: Text('Net Cash Flow · ${formatMonth(now)}', style: context.text.bodySmall)),
-                AmountText(month.netCashFlow, colorize: true, style: context.text.titleSmall),
-              ],
-            ),
-            const SizedBox(height: 12),
-          ],
-          AsyncView(
-            value: ref.watch(homeCashFlowProvider),
-            builder: (points) => CashFlowLineChart(points: points, daysInPeriod: monthEnd(now).day),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class TopSpendingCard extends ConsumerWidget {
   const TopSpendingCard({super.key});
 
@@ -106,7 +75,7 @@ class BudgetProgressCard extends ConsumerWidget {
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         Text(formatPercent(b.usage), style: context.text.labelLarge),
-                        Text(b.status.label, style: context.text.labelSmall!.copyWith(color: b.status.color(fin))),
+                        Text(b.status.label, style: context.text.labelSmall!.copyWith(color: b.status.textColor(fin))),
                       ],
                     ),
                   ],
@@ -214,7 +183,7 @@ class GoalsCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return FinCard(
-      onTap: () => context.go(Routes.goals),
+      onTap: () => context.push(Routes.goals),
       child: AsyncView(
         value: ref.watch(homeGoalsProvider),
         builder: (goals) {
@@ -223,7 +192,7 @@ class GoalsCard extends ConsumerWidget {
               icon: Icons.flag_outlined,
               title: 'Belum ada tujuan keuangan',
               actionLabel: 'Buat goal',
-              onAction: () => context.go(Routes.goals),
+              onAction: () => context.push(Routes.goals),
             );
           }
           return Column(

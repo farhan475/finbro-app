@@ -128,18 +128,23 @@ void main() {
   });
 
   test('auto-confirm posts one transaction per due instance, only once', () async {
-    await repo.create(salary(autoConfirm: true, start: DateTime(2026, 8, 1)));
+    now = DateTime(2026, 9, 1, 8);
+    await repo.create(salary(autoConfirm: true));
+    now = DateTime(2026, 9, 30, 10);
     await engine.sync(now);
     await engine.sync(now);
     final all = await txs();
-    expect(all.map((t) => t.transactionAt), unorderedEquals([DateTime(2026, 8, 25, 9), DateTime(2026, 9, 25, 9)]));
+    expect(all.map((t) => t.transactionAt), [DateTime(2026, 9, 25, 9)]);
     expect(all.every((t) => t.sourceType == SourceType.recurring), isTrue);
     final list = await instances();
-    expect(list.map((i) => i.status), [
-      RecurringStatus.confirmed,
-      RecurringStatus.confirmed,
-      RecurringStatus.scheduled,
-    ]);
+    expect(list.map((i) => i.status), [RecurringStatus.confirmed, RecurringStatus.scheduled]);
+  });
+
+  test('a past start date never auto-posts occurrences before the rule was created', () async {
+    await repo.create(salary(autoConfirm: true, start: DateTime(2026, 8, 1)));
+    await engine.sync(now);
+    expect(await txs(), isEmpty);
+    expect((await instances()).every((i) => i.dueDate.isAfter(DateTime(2026, 8, 31))), isTrue);
   });
 
   test('auto-confirm on the due day before reminder time uses now', () async {

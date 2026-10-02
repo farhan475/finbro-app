@@ -2,7 +2,6 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/routes.dart';
 import 'presentation/health_screen.dart';
-import 'presentation/reports_screen.dart';
 
 /// `/reports/health?month=2026-09` opens Financial Health for that month.
 String healthLocation(DateTime month) =>
@@ -18,7 +17,6 @@ DateTime? _parseMonth(String? raw) {
 }
 
 final List<RouteBase> reportsRoutes = [
-  GoRoute(path: Routes.reports, builder: (_, _) => const ReportsScreen()),
   GoRoute(
     path: Routes.health,
     builder: (_, state) => HealthScreen(initialMonth: _parseMonth(state.uri.queryParameters['month'])),

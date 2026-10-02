@@ -370,8 +370,8 @@ class _MovementSheetState extends ConsumerState<_MovementSheet> {
             if (isAdjustment) ...[
               SegmentedButton<bool>(
                 segments: const [
-                  ButtonSegment(value: false, label: Text('Tambah')),
-                  ButtonSegment(value: true, label: Text('Kurangi')),
+                  ButtonSegment(value: false, label: SegmentLabel('Tambah')),
+                  ButtonSegment(value: true, label: SegmentLabel('Kurangi')),
                 ],
                 selected: {_decrease},
                 showSelectedIcon: false,

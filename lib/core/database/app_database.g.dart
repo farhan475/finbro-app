@@ -8252,6 +8252,50 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   );
   late final $AppSettingsTable appSettings = $AppSettingsTable(this);
   late final $BackupsTable backups = $BackupsTable(this);
+  late final Index transactionsTransactionAt = Index(
+    'transactions_transaction_at',
+    'CREATE INDEX transactions_transaction_at ON transactions (transaction_at)',
+  );
+  late final Index transactionsAccountId = Index(
+    'transactions_account_id',
+    'CREATE INDEX transactions_account_id ON transactions (account_id)',
+  );
+  late final Index transactionsTransferToAccountId = Index(
+    'transactions_transfer_to_account_id',
+    'CREATE INDEX transactions_transfer_to_account_id ON transactions (transfer_to_account_id)',
+  );
+  late final Index transactionsCategoryIdTransactionAt = Index(
+    'transactions_category_id_transaction_at',
+    'CREATE INDEX transactions_category_id_transaction_at ON transactions (category_id, transaction_at)',
+  );
+  late final Index transactionsRecurringInstanceId = Index(
+    'transactions_recurring_instance_id',
+    'CREATE INDEX transactions_recurring_instance_id ON transactions (recurring_instance_id)',
+  );
+  late final Index attachmentsTransactionId = Index(
+    'attachments_transaction_id',
+    'CREATE INDEX attachments_transaction_id ON attachments (transaction_id)',
+  );
+  late final Index attachmentsImageHash = Index(
+    'attachments_image_hash',
+    'CREATE INDEX attachments_image_hash ON attachments (image_hash)',
+  );
+  late final Index goalMovementsGoalId = Index(
+    'goal_movements_goal_id',
+    'CREATE INDEX goal_movements_goal_id ON goal_movements (goal_id)',
+  );
+  late final Index goalMovementsTransactionId = Index(
+    'goal_movements_transaction_id',
+    'CREATE INDEX goal_movements_transaction_id ON goal_movements (transaction_id)',
+  );
+  late final Index recurringInstancesDueDateStatus = Index(
+    'recurring_instances_due_date_status',
+    'CREATE INDEX recurring_instances_due_date_status ON recurring_instances (due_date, status)',
+  );
+  late final Index recurringInstancesTransactionId = Index(
+    'recurring_instances_transaction_id',
+    'CREATE INDEX recurring_instances_transaction_id ON recurring_instances (transaction_id)',
+  );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -8271,6 +8315,17 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     merchantMappings,
     appSettings,
     backups,
+    transactionsTransactionAt,
+    transactionsAccountId,
+    transactionsTransferToAccountId,
+    transactionsCategoryIdTransactionAt,
+    transactionsRecurringInstanceId,
+    attachmentsTransactionId,
+    attachmentsImageHash,
+    goalMovementsGoalId,
+    goalMovementsTransactionId,
+    recurringInstancesDueDateStatus,
+    recurringInstancesTransactionId,
   ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules([

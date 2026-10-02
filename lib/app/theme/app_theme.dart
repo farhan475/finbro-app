@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
-/// Semantic palette from 06-ux-ui-spec.md. Primary stays monochrome; the
-/// semantic colors are reserved for state/data.
+/// Palette from the FinBro UI reference (FinBro_Contoh_UI.png). Surfaces and
+/// text stay monochrome; [accent] (lime green) marks selection, progress and
+/// chart series; semantic colors are reserved for state/data.
 @immutable
 class FinColors extends ThemeExtension<FinColors> {
   const FinColors({
@@ -13,6 +14,10 @@ class FinColors extends ThemeExtension<FinColors> {
     required this.border,
     required this.primary,
     required this.onPrimary,
+    required this.accent,
+    required this.onAccent,
+    required this.accentText,
+    required this.accentSoft,
     required this.positive,
     required this.negative,
     required this.warning,
@@ -27,52 +32,77 @@ class FinColors extends ThemeExtension<FinColors> {
   final Color border;
   final Color primary;
   final Color onPrimary;
+
+  /// Lime accent: selected nav item, progress bars, chart lines/bars,
+  /// selected calendar day.
+  final Color accent;
+
+  /// Foreground on a filled [accent] surface (dark in both modes: the lime is
+  /// too bright for white text).
+  final Color onAccent;
+
+  /// [accent] for text and icons on light surfaces: the lime fails contrast
+  /// on white, so light mode uses a darker green (≥ 4.5:1); dark mode keeps
+  /// the lime itself.
+  final Color accentText;
+
+  /// Faint accent tint for icon tiles, chart fills and inactive bars.
+  final Color accentSoft;
   final Color positive;
   final Color negative;
   final Color warning;
 
-  /// Monochrome ramp for chart series (largest share first).
+  /// Accent-derived ramp for chart series (largest share first). [1] is the
+  /// expense series next to accent income; [3] is the faint Budget bar.
   final List<Color> chart;
 
   static const light = FinColors(
     background: Color(0xFFF7F8FA),
     surface: Color(0xFFFFFFFF),
-    surface2: Color(0xFFF1F2F4),
+    surface2: Color(0xFFF2F3F6),
     text: Color(0xFF111111),
     muted: Color(0xFF667085),
-    border: Color(0xFFE5E7EB),
+    border: Color(0xFFE8EAEE),
     primary: Color(0xFF111111),
     onPrimary: Color(0xFFFFFFFF),
-    positive: Color(0xFF15803D),
-    negative: Color(0xFFB91C1C),
-    warning: Color(0xFFB45309),
+    accent: Color(0xFF5BEB12),
+    onAccent: Color(0xFF111111),
+    accentText: Color(0xFF2E7D05),
+    accentSoft: Color(0xFFE6FBD7),
+    positive: Color(0xFF16A34A),
+    negative: Color(0xFFDC2626),
+    warning: Color(0xFFD97706),
     chart: [
-      Color(0xFF111111),
-      Color(0xFF4B5563),
-      Color(0xFF9CA3AF),
-      Color(0xFFD1D5DB),
-      Color(0xFFE5E7EB),
+      Color(0xFF5BEB12),
+      Color(0xFF3A9E0A),
+      Color(0xFF8CF052),
+      Color(0xFFBDF69A),
+      Color(0xFFE2FBD3),
     ],
   );
 
   static const dark = FinColors(
-    background: Color(0xFF0B0B0B),
-    surface: Color(0xFF141414),
-    surface2: Color(0xFF1C1C1C),
+    background: Color(0xFF0B0D10),
+    surface: Color(0xFF12151A),
+    surface2: Color(0xFF1A1E25),
     text: Color(0xFFF5F5F5),
     muted: Color(0xFFA1A1AA),
-    border: Color(0xFF2A2A2A),
+    border: Color(0xFF242932),
     primary: Color(0xFFFFFFFF),
-    onPrimary: Color(0xFF0B0B0B),
-    positive: Color(0xFF4ADE80),
-    negative: Color(0xFFF87171),
-    warning: Color(0xFFFBBF24),
+    onPrimary: Color(0xFF0B0D10),
+    accent: Color(0xFF5BEB12),
+    onAccent: Color(0xFF0B0D10),
+    accentText: Color(0xFF5BEB12),
+    accentSoft: Color(0xFF1F3312),
+    positive: Color(0xFF22C55E),
+    negative: Color(0xFFEF4444),
+    warning: Color(0xFFF59E0B),
     chart: [
-      Color(0xFFF5F5F5),
-      Color(0xFFA1A1AA),
-      Color(0xFF71717A),
-      Color(0xFF52525B),
-      Color(0xFF3F3F46),
+      Color(0xFF5BEB12),
+      Color(0xFF3A9E0A),
+      Color(0xFFA6F47A),
+      Color(0xFF4E7F35),
+      Color(0xFF2A4F18),
     ],
   );
 
@@ -219,23 +249,27 @@ ThemeData buildTheme(Brightness brightness) {
       side: BorderSide(color: c.border),
       labelStyle: textTheme.labelMedium,
       secondaryLabelStyle: textTheme.labelMedium!.copyWith(color: c.onPrimary),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      // Pill filters as in the reference (All / Income / Expense / Transfer).
+      shape: const StadiumBorder(),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       showCheckmark: false,
     ),
     navigationBarTheme: NavigationBarThemeData(
-      backgroundColor: c.surface,
-      indicatorColor: c.surface2,
+      // The floating glass container in AppShell paints the background.
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      indicatorColor: c.accentSoft,
       elevation: 0,
-      height: 68,
+      height: 64,
       labelTextStyle: WidgetStateProperty.resolveWith(
         (s) => textTheme.labelSmall!.copyWith(
-          color: s.contains(WidgetState.selected) ? c.text : c.muted,
+          color: s.contains(WidgetState.selected) ? c.accentText : c.muted,
           fontWeight: s.contains(WidgetState.selected) ? FontWeight.w600 : FontWeight.w500,
         ),
       ),
       iconTheme: WidgetStateProperty.resolveWith(
         (s) => IconThemeData(
-          color: s.contains(WidgetState.selected) ? c.text : c.muted,
+          color: s.contains(WidgetState.selected) ? c.accentText : c.muted,
           size: 22,
         ),
       ),
@@ -261,11 +295,11 @@ ThemeData buildTheme(Brightness brightness) {
         selectedBackgroundColor: c.primary,
         selectedForegroundColor: c.onPrimary,
         side: BorderSide(color: c.border),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: const StadiumBorder(),
       ),
     ),
     progressIndicatorTheme: ProgressIndicatorThemeData(
-      color: c.primary,
+      color: c.accent,
       linearTrackColor: c.surface2,
     ),
     switchTheme: SwitchThemeData(

@@ -75,23 +75,25 @@ class RecurringEngine {
   final _confirming = <String>{};
   Future<void> _tail = Future.value();
 
+  /// Runs [action] after every previously queued sync or rule change, so
+  /// they never interleave (an in-flight sync never works from a stale rule).
+  Future<T> _serialized<T>(Future<T> Function() action) {
+    final run = _tail.then((_) => action());
+    _tail = run.then((_) {}, onError: (Object _) {});
+    return run;
+  }
+
   /// Idempotent: generates missing instances up to [generationHorizon],
   /// moves due instances to pending, auto-confirms opted-in rules and
   /// (re)schedules reminders. Calls are serialized (never interleave).
-  Future<void> sync(DateTime now) {
-    final run = _tail.then((_) => _sync(now));
-    _tail = run.catchError((Object _) {});
-    return run;
-  }
+  Future<void> sync(DateTime now) => _serialized(() => _sync(now));
 
   Future<void> _sync(DateTime now) async {
     final today = dateOnly(now);
     await _repairConfirmed(now);
 
     final rules = await (db.select(db.recurringRules)..where((r) => r.active.equals(true))).get();
-    for (final rule in rules) {
-      await _generate(rule, now);
-    }
+    await _generate(rules, now);
     await _normalizeStatuses(today, now);
 
     for (final rule in rules.where((r) => r.autoConfirm)) {
@@ -100,6 +102,9 @@ class RecurringEngine {
               (i) =>
                   i.recurringRuleId.equals(rule.id) &
                   i.status.isIn(_openStatuses) &
+                  // Dates before the rule existed are never posted
+                  // automatically (they stay pending for a manual confirm).
+                  i.dueDate.isBiggerOrEqualValue(sqlDate(rule.createdAt)) &
                   i.dueDate.isSmallerOrEqualValue(sqlDate(today)),
             )
             ..orderBy([(i) => OrderingTerm.asc(i.dueDate)]))
@@ -115,10 +120,30 @@ class RecurringEngine {
     await _syncReminders(today);
   }
 
-  /// Rule edits: open instances from today on that no longer match the
-  /// schedule are removed, remaining open ones get the new amount, then the
-  /// schedule is regenerated.
-  Future<void> regenerateRule(String ruleId, DateTime now) async {
+  /// Saves a rule edit or (de)activation ([changes]), then regenerates: open
+  /// instances outside the start/end dates or from today on that no longer
+  /// match the schedule are removed, remaining open ones get the new amount,
+  /// and the schedule is synced. Serialized with [sync].
+  Future<void> updateRule(String ruleId, RecurringRulesCompanion changes, DateTime now) =>
+      _serialized(() async {
+        await (db.update(db.recurringRules)..where((r) => r.id.equals(ruleId))).write(changes);
+        await _regenerate(ruleId, now);
+        await _sync(now);
+      });
+
+  /// Deletes a rule (its instances cascade) after cancelling the reminders
+  /// of its open instances. Confirmed transactions stay in the ledger.
+  Future<void> deleteRule(String ruleId) => _serialized(() async {
+    final open = await (db.select(db.recurringInstances)
+          ..where((i) => i.recurringRuleId.equals(ruleId) & i.status.isIn(_openStatuses)))
+        .get();
+    for (final inst in open) {
+      await _notifications.cancel(NotificationIds.recurring(inst.id));
+    }
+    await (db.delete(db.recurringRules)..where((r) => r.id.equals(ruleId))).go();
+  });
+
+  Future<void> _regenerate(String ruleId, DateTime now) async {
     final rule = await (db.select(db.recurringRules)..where((r) => r.id.equals(ruleId))).getSingleOrNull();
     if (rule == null) return;
     final today = dateOnly(now);
@@ -130,9 +155,9 @@ class RecurringEngine {
         .get();
     final end = rule.endDate;
     for (final inst in open) {
-      final afterEnd = end != null && inst.dueDate.isAfter(end);
+      final outside = inst.dueDate.isBefore(rule.startDate) || (end != null && inst.dueDate.isAfter(end));
       final stale = !inst.dueDate.isBefore(today) && !desired.contains(inst.dueDate);
-      if (afterEnd || stale) {
+      if (outside || stale) {
         await _notifications.cancel(NotificationIds.recurring(inst.id));
         await (db.delete(db.recurringInstances)..where((i) => i.id.equals(inst.id))).go();
       } else if (inst.amount != rule.amount) {
@@ -140,17 +165,6 @@ class RecurringEngine {
           RecurringInstancesCompanion(amount: Value(rule.amount), updatedAt: Value(now)),
         );
       }
-    }
-    await sync(now);
-  }
-
-  /// Cancels reminders of every open instance of [ruleId] (before deletion).
-  Future<void> cancelRuleReminders(String ruleId) async {
-    final open = await (db.select(db.recurringInstances)
-          ..where((i) => i.recurringRuleId.equals(ruleId) & i.status.isIn(_openStatuses)))
-        .get();
-    for (final inst in open) {
-      await _notifications.cancel(NotificationIds.recurring(inst.id));
     }
   }
 
@@ -173,8 +187,8 @@ class RecurringEngine {
           .getSingleOrNull();
       if (inst == null || !inst.status.isOpen) return null;
 
-      // A linked confirmed transaction already exists (e.g. crash between
-      // create and status update): link it instead of posting twice.
+      // A linked confirmed transaction already exists (e.g. created outside
+      // the engine): link it instead of posting twice.
       final existing = await (db.select(db.transactions)
             ..where(
               (t) =>
@@ -203,21 +217,46 @@ class RecurringEngine {
           sourceType: SourceType.recurring,
           recurringInstanceId: instanceId,
         ),
+        // Posting and closing commit together; if the instance was closed
+        // meanwhile, the posting rolls back.
+        inTransaction: (txId) async {
+          if (!await _markClosed(instanceId, RecurringStatus.confirmed, at, transactionId: txId)) {
+            throw const _InstanceClosed();
+          }
+        },
       );
-      await _close(instanceId, RecurringStatus.confirmed, at, transactionId: txId);
+      await _notifications.cancel(NotificationIds.recurring(instanceId));
       return txId;
+    } on _InstanceClosed {
+      return null;
     } finally {
       _confirming.remove(instanceId);
     }
   }
 
-  /// Marks an open instance skipped (no transaction). False if not open.
-  Future<bool> skip(String instanceId) => _close(instanceId, RecurringStatus.skipped, _clock());
+  /// Marks an open instance skipped (no transaction). False if not open or
+  /// a confirmation is in flight.
+  Future<bool> skip(String instanceId) => _closeManually(instanceId, RecurringStatus.skipped);
 
-  /// Cancels an open instance (no transaction). False if not open.
-  Future<bool> cancel(String instanceId) => _close(instanceId, RecurringStatus.cancelled, _clock());
+  /// Cancels an open instance (no transaction). False if not open or a
+  /// confirmation is in flight.
+  Future<bool> cancel(String instanceId) => _closeManually(instanceId, RecurringStatus.cancelled);
+
+  Future<bool> _closeManually(String instanceId, RecurringStatus status) async =>
+      !_confirming.contains(instanceId) && await _close(instanceId, status, _clock());
 
   Future<bool> _close(
+    String instanceId,
+    RecurringStatus status,
+    DateTime now, {
+    String? transactionId,
+  }) async {
+    final closed = await _markClosed(instanceId, status, now, transactionId: transactionId);
+    await _notifications.cancel(NotificationIds.recurring(instanceId));
+    return closed;
+  }
+
+  Future<bool> _markClosed(
     String instanceId,
     RecurringStatus status,
     DateTime now, {
@@ -232,7 +271,6 @@ class RecurringEngine {
             updatedAt: Value(now),
           ),
         );
-    await _notifications.cancel(NotificationIds.recurring(instanceId));
     return n > 0;
   }
 
@@ -248,20 +286,63 @@ class RecurringEngine {
     }
   }
 
-  Future<void> _generate(RecurringRule rule, DateTime now) async {
+  /// Inserts the missing instances of [rules] up to [generationHorizon] in
+  /// one batch, and writes nothing when none are missing (a drift batch
+  /// always notifies listeners).
+  ///
+  /// Candidates start at the current recurrence period, or right after the
+  /// rule's latest instance when that is earlier (catch-up after the app was
+  /// not opened), but never before the period of the rule's creation or last
+  /// change: a past start date or an edit does not backfill older periods.
+  /// A candidate is dropped when its period already has an instance of any
+  /// status, so an edited schedule never adds a second payment to a settled
+  /// period, yet the current period keeps its obligation when it has none.
+  Future<void> _generate(List<RecurringRule> rules, DateTime now) async {
+    if (rules.isEmpty) return;
     final today = dateOnly(now);
-    // After an edit/reactivation, never backfill dates before the change.
-    var from = rule.startDate;
-    if (rule.updatedAt.isAfter(rule.createdAt)) {
-      final edited = dateOnly(rule.updatedAt);
-      if (edited.isAfter(from)) from = edited;
+    final horizon = generationHorizon(now);
+    final latest = {
+      for (final r in await db.customSelect(
+        'SELECT recurring_rule_id AS rid, MAX(due_date) AS last FROM recurring_instances '
+        'GROUP BY recurring_rule_id',
+        readsFrom: {db.recurringInstances},
+      ).get())
+        r.read<String>('rid'): DateTime.parse(r.read<String>('last')),
+    };
+
+    final plans = <(RecurringRule, RecurrenceSpec, List<DateTime>)>[];
+    for (final rule in rules) {
+      final spec = RecurrenceSpec.fromRule(rule);
+      final current = spec.periodStart(today);
+      final last = latest[rule.id];
+      final next = last == null ? current : DateTime(last.year, last.month, last.day + 1);
+      final resume = next.isBefore(current) ? next : current;
+      final changed = spec.periodStart(rule.updatedAt);
+      final dates = spec.occurrences(resume.isAfter(changed) ? resume : changed, horizon);
+      if (dates.isNotEmpty) plans.add((rule, spec, dates));
     }
-    final dates = RecurrenceSpec.fromRule(rule).occurrences(from, generationHorizon(now));
-    if (dates.isEmpty) return;
-    await db.batch((b) {
+    if (plans.isEmpty) return;
+
+    final lowest = plans.map((p) => p.$2.periodStart(p.$3.first)).reduce((a, b) => a.isBefore(b) ? a : b);
+    final existing = <String, List<DateTime>>{};
+    final known = await (db.select(db.recurringInstances)
+          ..where(
+            (i) =>
+                i.recurringRuleId.isIn([for (final p in plans) p.$1.id]) &
+                i.dueDate.isBiggerOrEqualValue(sqlDate(lowest)),
+          ))
+        .get();
+    for (final inst in known) {
+      existing.putIfAbsent(inst.recurringRuleId, () => []).add(inst.dueDate);
+    }
+
+    final rows = <RecurringInstancesCompanion>[];
+    for (final (rule, spec, dates) in plans) {
+      final taken = existing[rule.id] ?? <DateTime>[];
       for (final d in dates) {
-        b.insert(
-          db.recurringInstances,
+        if (taken.any((t) => spec.samePeriod(t, d))) continue;
+        taken.add(d);
+        rows.add(
           RecurringInstancesCompanion.insert(
             id: newId(),
             recurringRuleId: rule.id,
@@ -271,11 +352,12 @@ class RecurringEngine {
             createdAt: now,
             updatedAt: now,
           ),
-          // UNIQUE (recurring_rule_id, due_date) makes generation idempotent.
-          mode: InsertMode.insertOrIgnore,
         );
       }
-    });
+    }
+    if (rows.isEmpty) return;
+    // UNIQUE (recurring_rule_id, due_date) keeps generation idempotent.
+    await db.batch((b) => b.insertAll(db.recurringInstances, rows, mode: InsertMode.insertOrIgnore));
   }
 
   Future<void> _normalizeStatuses(DateTime today, DateTime now) async {
@@ -295,20 +377,21 @@ class RecurringEngine {
   }
 
   Future<void> _syncReminders(DateTime today) async {
+    final pending = (await _notifications.pendingPayloads()).keys.toSet();
     final q = db.select(db.recurringInstances).join([
       innerJoin(db.recurringRules, db.recurringRules.id.equalsExp(db.recurringInstances.recurringRuleId)),
     ])..where(db.recurringInstances.dueDate.isBiggerOrEqualValue(sqlDate(today)));
     final rows = await q.get();
-    if (rows.isEmpty) return;
-    final accounts = {for (final a in await db.select(db.accounts).get()) a.id: a.name};
+    final accounts = rows.isEmpty
+        ? const <String, String>{}
+        : {for (final a in await db.select(db.accounts).get()) a.id: a.name};
+    final wanted = <int>{};
     for (final row in rows) {
       final inst = row.readTable(db.recurringInstances);
       final rule = row.readTable(db.recurringRules);
       final id = NotificationIds.recurring(inst.id);
-      if (!inst.status.isOpen || !rule.active || !rule.reminderEnabled) {
-        await _notifications.cancel(id);
-        continue;
-      }
+      if (!inst.status.isOpen || !rule.active || !rule.reminderEnabled) continue;
+      wanted.add(id);
       await _notifications.schedule(
         id: id,
         at: reminderAt(rule, inst.dueDate),
@@ -317,5 +400,18 @@ class RecurringEngine {
         payload: {'kind': NotificationKind.recurring, 'instanceId': inst.id},
       );
     }
+    // Every other pending recurring reminder is obsolete: its instance was
+    // closed, its rule changed, or the instance no longer exists (e.g. the
+    // database was replaced by a restore).
+    for (final id in pending) {
+      if (NotificationIds.isRecurring(id) && !wanted.contains(id)) {
+        await _notifications.cancel(id);
+      }
+    }
   }
+}
+
+/// Thrown inside the confirm transaction when the instance is no longer open.
+class _InstanceClosed implements Exception {
+  const _InstanceClosed();
 }

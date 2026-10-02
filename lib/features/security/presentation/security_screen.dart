@@ -148,7 +148,7 @@ class SecurityScreen extends ConsumerWidget {
           const SizedBox(height: 8),
           SegmentedButton<int>(
             segments: [
-              for (final e in lockTimeoutOptions.entries) ButtonSegment(value: e.key, label: Text(e.value)),
+              for (final e in lockTimeoutOptions.entries) ButtonSegment(value: e.key, label: SegmentLabel(e.value)),
             ],
             selected: {
               lockTimeoutOptions.containsKey(config.timeoutSeconds) ? config.timeoutSeconds : defaultLockTimeoutSeconds,

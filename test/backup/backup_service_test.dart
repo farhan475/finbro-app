@@ -147,6 +147,75 @@ void main() {
     expect(report.ok, isTrue, reason: report.summary.join('; '));
   });
 
+  test('backups carry no PIN data and restore keeps this device\'s lock settings', () async {
+    await seedData();
+    final settings = AppSettingsRepository(db);
+    await settings.set(SettingKeys.pinHash, 'old-hash');
+    await settings.set(SettingKeys.pinSalt, 'old-salt');
+    final created = await service.createBackup(now);
+    final validated = BackupService.validate(created.package.bytes);
+
+    final staged = File(p.join(tmp.path, 'inspect.sqlite'))..writeAsBytesSync(validated.sqlite);
+    final backupDb = AppDatabase(NativeDatabase(staged));
+    addTearDown(backupDb.close);
+    expect(await AppSettingsRepository(backupDb).get(SettingKeys.pinHash), isNull);
+    expect(await AppSettingsRepository(backupDb).get(SettingKeys.pinSalt), isNull);
+
+    // The device sets a different PIN before restoring.
+    await settings.set(SettingKeys.pinHash, 'device-hash');
+    await settings.set(SettingKeys.pinSalt, 'device-salt');
+    final dbFile = File(p.join(tmp.path, 'live2', 'finbro.sqlite'));
+    await service.restore(
+      validated,
+      now: now.add(const Duration(minutes: 1)),
+      replaceDatabase: (replace) => replace(dbFile),
+    );
+    final restored = AppDatabase(NativeDatabase(dbFile));
+    addTearDown(restored.close);
+    expect(await AppSettingsRepository(restored).get(SettingKeys.pinHash), 'device-hash');
+    expect(await AppSettingsRepository(restored).get(SettingKeys.pinSalt), 'device-salt');
+  });
+
+  test('two safety snapshots in the same minute never overwrite each other', () async {
+    await seedData();
+    final first = await service.createSafetySnapshot(now);
+    final firstBytes = await first.readAsBytes();
+    await expense(await account('Extra', 1), 1000);
+    final second = await service.createSafetySnapshot(now);
+
+    expect(second.path, isNot(first.path));
+    expect(await first.readAsBytes(), firstBytes);
+    expect(await second.exists(), isTrue);
+  });
+
+  test('restore keeps the newer of the live last-backup date and the backup date', () async {
+    await seedData();
+    final old = BackupService.validate((await service.createBackup(now)).package.bytes);
+    final later = now.add(const Duration(days: 3));
+    await service.createBackup(later);
+
+    Future<String?> restoredLastBackup(AppDatabase live, String name) async {
+      final dbFile = File(p.join(tmp.path, name, 'finbro.sqlite'));
+      final s = BackupService(
+        db: live,
+        attachmentsDir: () async => attachments,
+        backupsDir: () async => backups,
+        workDir: () async => work,
+      );
+      await s.restore(old, now: later, replaceDatabase: (replace) => replace(dbFile));
+      final restored = AppDatabase(NativeDatabase(dbFile));
+      addTearDown(restored.close);
+      return AppSettingsRepository(restored).get(SettingKeys.lastBackupAt);
+    }
+
+    // Same device: a backup made after the restored one is not forgotten.
+    expect(await restoredLastBackup(db, 'same'), '2026-10-03T21:05:00');
+    // New device without any backup history: the backup's own date counts.
+    final fresh = AppDatabase.memory();
+    addTearDown(fresh.close);
+    expect(await restoredLastBackup(fresh, 'fresh'), '2026-09-30T21:05:00');
+  });
+
   test('restore on a new device rewrites attachment paths and prunes stale files', () async {
     await seedData();
     final package = await service.buildPackage(now);

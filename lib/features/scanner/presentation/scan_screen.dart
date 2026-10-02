@@ -7,6 +7,7 @@ import '../../../app/theme/app_theme.dart';
 import '../../../core/providers.dart';
 import '../../../core/utilities/app_logger.dart';
 import '../../../shared/widgets/fin_widgets.dart';
+import '../../security/presentation/app_lock_gate.dart';
 import '../data/image_preprocessor.dart';
 import '../data/mlkit_ocr_engine.dart';
 import '../domain/ocr_engine.dart';
@@ -36,16 +37,24 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
   /// Picked image waiting for the crop step.
   ({String path, ScanSource source})? _pending;
 
-  Future<void> _start(ScanSource source) async {
+  /// Receipts come from the camera or the gallery (FR-SCN-001 capture/import);
+  /// screenshots always from the gallery.
+  Future<void> _start(ScanSource source, ImageSource from) async {
+    final camera = from == ImageSource.camera;
     final XFile? picked;
     try {
-      picked = await _picker.pickImage(
-        source: source == ScanSource.receipt ? ImageSource.camera : ImageSource.gallery,
-        imageQuality: 92,
+      // The camera/gallery activity pauses the app; it must not re-lock it.
+      picked = await AppLockGate.runExempt(
+        () => _picker.pickImage(
+          source: from,
+          imageQuality: 92,
+          maxWidth: ImagePreprocessor.maxSourceSide,
+          maxHeight: ImagePreprocessor.maxSourceSide,
+        ),
       );
     } catch (e, s) {
       AppLogger.error('Gagal membuka kamera/galeri', e, s);
-      if (mounted) showSnack(context, 'Gagal membuka ${source == ScanSource.receipt ? 'kamera' : 'galeri'}.');
+      if (mounted) showSnack(context, 'Gagal membuka ${camera ? 'kamera' : 'galeri'}.');
       return;
     }
     if (picked == null || !mounted) return;
@@ -139,6 +148,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
                 key: ValueKey(pending.path),
                 imagePath: pending.path,
                 onDone: (choice) => _read(pending.path, pending.source, choice),
+                onBack: () => setState(() => _pending = null),
               )
             : result == null
             ? _SourcePicker(onPick: _start, ocrSupported: ref.watch(ocrEngineProvider).isSupported)
@@ -182,7 +192,7 @@ class _Processing extends StatelessWidget {
 
 class _SourcePicker extends StatelessWidget {
   const _SourcePicker({required this.onPick, required this.ocrSupported});
-  final ValueChanged<ScanSource> onPick;
+  final void Function(ScanSource source, ImageSource from) onPick;
   final bool ocrSupported;
 
   @override
@@ -202,14 +212,21 @@ class _SourcePicker extends StatelessWidget {
           icon: Icons.photo_camera_outlined,
           title: 'Scan struk',
           subtitle: 'Foto struk belanja dengan kamera',
-          onTap: () => onPick(ScanSource.receipt),
+          onTap: () => onPick(ScanSource.receipt, ImageSource.camera),
+        ),
+        const SizedBox(height: 12),
+        _SourceCard(
+          icon: Icons.photo_library_outlined,
+          title: 'Struk dari galeri',
+          subtitle: 'Foto struk yang sudah tersimpan',
+          onTap: () => onPick(ScanSource.receipt, ImageSource.gallery),
         ),
         const SizedBox(height: 12),
         _SourceCard(
           icon: Icons.image_outlined,
           title: 'Import screenshot',
           subtitle: 'Bukti transfer atau pembayaran dari galeri',
-          onTap: () => onPick(ScanSource.screenshot),
+          onTap: () => onPick(ScanSource.screenshot, ImageSource.gallery),
         ),
         if (!ocrSupported) ...[
           const SizedBox(height: 20),

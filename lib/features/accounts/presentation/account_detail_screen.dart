@@ -216,7 +216,7 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
                 FittedBox(
                   fit: BoxFit.scaleDown,
                   alignment: Alignment.centerLeft,
-                  child: AmountText(balance, style: context.text.displaySmall),
+                  child: AmountText(balance, alertNegative: true, style: context.text.displaySmall),
                 ),
               const SizedBox(height: 4),
               Text('Saldo awal ${formatRupiah(account.openingBalance)}', style: context.text.bodySmall),

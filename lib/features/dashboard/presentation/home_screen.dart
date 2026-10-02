@@ -3,16 +3,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/routes.dart';
+import '../../../app/shell.dart';
 import '../../../app/theme/app_theme.dart';
 import '../../../core/database/enums.dart';
 import '../../../core/finance/finance_math.dart';
-import '../../../core/formatting/dates.dart';
 import '../../../core/formatting/money.dart';
 import '../../../core/providers.dart';
 import '../../../core/settings/app_settings_repository.dart';
 import '../../../shared/widgets/category_icon.dart';
 import '../../../shared/widgets/fin_widgets.dart';
 import '../../reports/domain/report_shaping.dart';
+import '../../reports/presentation/widgets/report_charts.dart';
+import '../../settings/presentation/settings_widgets.dart';
 import '../data/dashboard_providers.dart';
 import 'available_breakdown_sheet.dart';
 import 'home_sections.dart';
@@ -25,58 +27,55 @@ String greetingFor(DateTime now) {
   return 'Good Evening';
 }
 
-/// Dashboard (06-ux §9): answers "how much money, where, what came in/out,
-/// what is safe to spend, what is coming next".
+/// Balance at the start of the month and its daily path, derived from the
+/// current total and the month's cumulative confirmed income/expense
+/// (transfers net to zero). Returns `(start, path)`.
+(int, List<int>) balancePath(int totalBalance, List<CashFlowPoint> points) {
+  final net = points.isEmpty ? 0 : points.last.income - points.last.expense;
+  final start = totalBalance - net;
+  return (start, [start, for (final p in points) start + p.income - p.expense]);
+}
+
+/// Dashboard (06-ux §9, layout from the UI reference): balance card with
+/// trend and income/expense, top spending, then what is safe to spend and
+/// what is coming next.
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final now = ref.watch(clockProvider)();
-    final name = ref.watch(appSettingsProvider).value?[SettingKeys.userName]?.trim() ?? '';
+    final name = ref.watch(userNameProvider);
 
     return Scaffold(
-      floatingActionButton: FloatingActionButton(
-        heroTag: 'home-fab',
-        tooltip: 'Tambah transaksi',
-        onPressed: () => context.push(Routes.transactionNew()),
-        child: const Icon(Icons.add),
+      floatingActionButton: AboveNavBar(
+        child: FloatingActionButton(
+          heroTag: 'home-fab',
+          tooltip: 'Tambah transaksi',
+          onPressed: () => context.push(Routes.transactionNew()),
+          child: const Icon(Icons.add),
+        ),
       ),
       body: SafeArea(
         bottom: false,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
+          padding: EdgeInsets.fromLTRB(16, 12, 16, navBarClearance(context, fab: true)),
           children: [
             _Header(greeting: greetingFor(now), name: name),
             const SizedBox(height: 20),
+            const ReliabilityBanners(),
             const _OverviewSection(),
-            SectionHeader(
-              'Cash Flow',
-              actionLabel: 'Laporan',
-              onAction: () => context.push(Routes.reports),
-            ),
-            const CashFlowCard(),
-            SectionHeader(
-              'Top Spending',
-              actionLabel: 'Detail',
-              onAction: () => context.push(Routes.reports),
-            ),
+            SectionHeader('Top Spending', actionLabel: 'Detail', onAction: () => context.go(Routes.reports)),
             const TopSpendingCard(),
             SectionHeader('Budget', actionLabel: 'Lihat semua', onAction: () => context.go(Routes.budget)),
             const BudgetProgressCard(),
-            SectionHeader(
-              'Upcoming',
-              actionLabel: 'Lihat semua',
-              onAction: () => context.push(Routes.recurring),
-            ),
+            SectionHeader('Upcoming', actionLabel: 'Lihat semua', onAction: () => context.push(Routes.recurring)),
             const UpcomingCard(),
-            SectionHeader('Tujuan Keuangan', actionLabel: 'Lihat semua', onAction: () => context.go(Routes.goals)),
+            SectionHeader('Tujuan Keuangan', actionLabel: 'Lihat semua', onAction: () => context.push(Routes.goals)),
             const GoalsCard(),
-            SectionHeader(
-              'Transaksi terbaru',
-              actionLabel: 'Lihat semua',
-              onAction: () => context.go(Routes.activity),
-            ),
+            SectionHeader('Akun', actionLabel: 'Kelola', onAction: () => context.push(Routes.accounts)),
+            const _AccountsStrip(),
+            SectionHeader('Transaksi terbaru', actionLabel: 'Lihat semua', onAction: () => context.go(Routes.activity)),
             const RecentTransactionsCard(),
           ],
         ),
@@ -85,16 +84,28 @@ class HomeScreen extends ConsumerWidget {
   }
 }
 
-class _Header extends StatelessWidget {
+/// Avatar (initial), greeting and a bell that opens pending/upcoming
+/// recurring items; a dot marks items waiting for confirmation.
+class _Header extends ConsumerWidget {
   const _Header({required this.greeting, required this.name});
   final String greeting;
   final String name;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final fin = context.fin;
+    final pending =
+        ref.watch(upcomingRecurringProvider).value?.where((u) => u.instance.status == RecurringStatus.pending).length ??
+        0;
     return Row(
       children: [
-        const FinBroMark(size: 28),
+        CircleAvatar(
+          radius: 20,
+          backgroundColor: fin.surface2,
+          child: name.isEmpty
+              ? const FinBroMark(size: 20)
+              : Text(name.characters.first.toUpperCase(), style: context.text.titleMedium),
+        ),
         const SizedBox(width: 12),
         Expanded(
           child: Column(
@@ -102,7 +113,7 @@ class _Header extends StatelessWidget {
             children: [
               Text(
                 name.isEmpty ? greeting : '$greeting,',
-                style: name.isEmpty ? context.text.titleLarge : context.text.bodyMedium!.copyWith(color: context.fin.muted),
+                style: name.isEmpty ? context.text.titleLarge : context.text.bodyMedium!.copyWith(color: fin.muted),
               ),
               if (name.isNotEmpty)
                 Text(name, style: context.text.titleLarge, maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -110,16 +121,21 @@ class _Header extends StatelessWidget {
           ),
         ),
         IconButton(
-          tooltip: 'Laporan',
-          icon: const Icon(Icons.insights_outlined),
-          onPressed: () => context.push(Routes.reports),
+          tooltip: pending == 0 ? 'Jadwal & pengingat' : 'Jadwal & pengingat, $pending perlu konfirmasi',
+          onPressed: () => context.push(Routes.recurring),
+          icon: Badge(
+            isLabelVisible: pending > 0,
+            smallSize: 8,
+            backgroundColor: fin.accent,
+            child: const Icon(Icons.notifications_none_rounded),
+          ),
         ),
       ],
     );
   }
 }
 
-/// Available to Spend, quick actions, balance + accounts, income/expense.
+/// Balance card, Available to Spend and quick actions.
 class _OverviewSection extends ConsumerWidget {
   const _OverviewSection();
 
@@ -130,10 +146,6 @@ class _OverviewSection extends ConsumerWidget {
       builder: (o) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _AvailableToSpend(overview: o),
-          const SizedBox(height: 16),
-          const _QuickActions(),
-          const SizedBox(height: 16),
           if (o.balances.isEmpty)
             FinCard(
               child: EmptyState(
@@ -147,13 +159,156 @@ class _OverviewSection extends ConsumerWidget {
           else
             _BalanceCard(overview: o),
           const SizedBox(height: 12),
-          _IncomeExpenseRow(overview: o),
+          _AvailableToSpend(overview: o),
+          const SizedBox(height: 12),
+          const _QuickActions(),
         ],
       ),
     );
   }
 }
 
+class _BalanceCard extends ConsumerWidget {
+  const _BalanceCard({required this.overview});
+  final HomeOverview overview;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final fin = context.fin;
+    final hidden = ref.watch(hideBalanceProvider);
+    final points = ref.watch(homeCashFlowProvider).value ?? const <CashFlowPoint>[];
+    final (start, path) = balancePath(overview.totalBalance, points);
+    final change = start > 0 ? percentChange(overview.totalBalance, start) : null;
+    String money(int v) => hidden ? 'Rp ••••••' : formatRupiah(v);
+
+    return FinCard(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text('Total Balance', style: context.text.bodySmall),
+              SizedBox(
+                width: 36,
+                height: 32,
+                child: IconButton(
+                  padding: EdgeInsets.zero,
+                  iconSize: 18,
+                  tooltip: hidden ? 'Tampilkan saldo' : 'Sembunyikan saldo',
+                  color: fin.muted,
+                  icon: Icon(hidden ? Icons.visibility_off_outlined : Icons.visibility_outlined),
+                  onPressed: () => ref.read(appSettingsRepositoryProvider).setBool(SettingKeys.hideBalance, !hidden),
+                ),
+              ),
+              const Spacer(),
+              InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => context.push(Routes.accounts),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    children: [
+                      Text('${overview.balances.length} account', style: context.text.labelSmall),
+                      Icon(Icons.chevron_right, size: 18, color: fin.muted),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              money(overview.totalBalance),
+              style: context.text.displaySmall!.copyWith(
+                fontSize: 30,
+                color: !hidden && overview.totalBalance < 0 ? fin.negative : null,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+          if (change != null && !hidden) ...[const SizedBox(height: 4), _ChangeLine(change: change)],
+          const SizedBox(height: 12),
+          if (hidden) const SizedBox(height: 84) else BalanceSparkline(values: path),
+          const SizedBox(height: 12),
+          Divider(color: fin.border),
+          const SizedBox(height: 12),
+          IntrinsicHeight(
+            child: Row(
+              children: [
+                Expanded(
+                  child: _FlowFigure(label: 'Income', value: money(overview.month.income)),
+                ),
+                VerticalDivider(color: fin.border, width: 24),
+                Expanded(
+                  child: _FlowFigure(label: 'Expense', value: money(overview.month.expense)),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// "↑ 12,5% dari bulan lalu": arrow + sign + color, never color alone.
+class _ChangeLine extends StatelessWidget {
+  const _ChangeLine({required this.change});
+  final double change;
+
+  @override
+  Widget build(BuildContext context) {
+    final fin = context.fin;
+    final up = change >= 0;
+    final color = change.abs() < 0.05 ? fin.muted : (up ? fin.positive : fin.negative);
+    return Row(
+      children: [
+        Icon(up ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded, size: 14, color: color),
+        const SizedBox(width: 2),
+        Text(
+          '${formatChange(change)} ',
+          style: context.text.labelMedium!.copyWith(color: color, fontWeight: FontWeight.w600),
+        ),
+        Flexible(
+          child: Text(
+            'dari bulan lalu',
+            style: context.text.labelMedium!.copyWith(color: fin.muted),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _FlowFigure extends StatelessWidget {
+  const _FlowFigure({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(label, style: context.text.bodySmall),
+      const SizedBox(height: 2),
+      FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerLeft,
+        child: Text(
+          value,
+          style: context.text.titleSmall!.copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
+        ),
+      ),
+    ],
+  );
+}
+
+/// Compact Available to Spend row; tap explains the formula (03 §4).
 class _AvailableToSpend extends StatelessWidget {
   const _AvailableToSpend({required this.overview});
   final HomeOverview overview;
@@ -166,35 +321,36 @@ class _AvailableToSpend extends StatelessWidget {
       button: true,
       label: 'Available to Spend ${formatRupiah(value)}. Ketuk untuk rincian.',
       excludeSemantics: true,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(AppRadius.card),
+      child: FinCard(
         onTap: () => showAvailableBreakdownSheet(context, overview.available),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  formatRupiah(value),
-                  style: context.text.displaySmall!.copyWith(
-                    color: value < 0 ? fin.negative : null,
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 4),
-              Row(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(color: fin.accentSoft, borderRadius: BorderRadius.circular(10)),
+              child: Icon(Icons.savings_outlined, size: 20, color: fin.accentText),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Row(
                 children: [
-                  Text('Available to Spend', style: context.text.bodySmall),
+                  Flexible(child: Text('Available to Spend', style: context.text.bodyMedium, maxLines: 2)),
                   const SizedBox(width: 4),
                   Icon(Icons.info_outline, size: 14, color: fin.muted),
                 ],
               ),
-            ],
-          ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              formatRupiah(value),
+              style: context.text.titleMedium!.copyWith(
+                color: value < 0 ? fin.negative : null,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -224,11 +380,11 @@ class _QuickActions extends StatelessWidget {
                 children: [
                   Icon(icon, size: 22),
                   const SizedBox(height: 6),
-                  Text(
-                    label,
-                    style: context.text.labelMedium,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  // Large font scales shrink the label rather than cut it
+                  // to "Tra…", which made Transaksi/Transfer ambiguous.
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(label, style: context.text.labelMedium, maxLines: 1),
                   ),
                 ],
               ),
@@ -240,136 +396,67 @@ class _QuickActions extends StatelessWidget {
   }
 }
 
-class _BalanceCard extends StatelessWidget {
-  const _BalanceCard({required this.overview});
-  final HomeOverview overview;
+/// Per-account balances (06-ux §9 "account summary").
+class _AccountsStrip extends ConsumerWidget {
+  const _AccountsStrip();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final fin = context.fin;
-    return FinCard(
-      onTap: () => context.push(Routes.accounts),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(child: Text('Total Balance', style: context.text.bodySmall)),
-              Text('${overview.balances.length} account', style: context.text.labelSmall),
-              Icon(Icons.chevron_right, size: 18, color: fin.muted),
-            ],
-          ),
-          const SizedBox(height: 2),
-          AmountText(overview.totalBalance, style: context.text.headlineSmall),
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 58,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: overview.balances.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 8),
-              itemBuilder: (context, i) {
-                final b = overview.balances[i];
-                return Container(
-                  width: 150,
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: fin.surface2,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        b.account.icon == null ? accountTypeIcon(b.account.type) : iconFor(b.account.icon),
-                        size: 18,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              b.account.name,
-                              style: context.text.labelMedium,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+    final hidden = ref.watch(hideBalanceProvider);
+    return AsyncView(
+      value: ref.watch(homeOverviewProvider),
+      builder: (o) => o.balances.isEmpty
+          ? const SizedBox.shrink()
+          : SizedBox(
+              height: 64,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: o.balances.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 8),
+                itemBuilder: (context, i) {
+                  final b = o.balances[i];
+                  return SizedBox(
+                    width: 160,
+                    child: FinCard(
+                      onTap: () => context.push(Routes.accounts),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      child: Row(
+                        children: [
+                          Icon(
+                            b.account.icon == null ? accountTypeIcon(b.account.type) : iconFor(b.account.icon),
+                            size: 18,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  b.account.name,
+                                  style: context.text.labelMedium,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                // Large balances shrink instead of hiding digits ("Rp 11.808.6…").
+                                FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  alignment: Alignment.centerLeft,
+                                  child: hidden
+                                      ? Text('Rp ••••', style: context.text.bodySmall!.copyWith(color: fin.text))
+                                      : AmountText(b.balance, alertNegative: true, style: context.text.bodySmall!.copyWith(color: fin.text)),
+                                ),
+                              ],
                             ),
-                            AmountText(b.balance, style: context.text.bodySmall!.copyWith(color: fin.text)),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
-                );
-              },
+                    ),
+                  );
+                },
+              ),
             ),
-          ),
-        ],
-      ),
     );
   }
-}
-
-class _IncomeExpenseRow extends StatelessWidget {
-  const _IncomeExpenseRow({required this.overview});
-  final HomeOverview overview;
-
-  @override
-  Widget build(BuildContext context) {
-    final prev = overview.previousPeriod;
-    final last = DateTime(prev.end.year, prev.end.month, prev.end.day - 1);
-    final caption = overview.partial
-        ? 'vs ${formatDayShort(prev.start)}–${formatDayShort(last)}'
-        : 'vs ${formatMonth(prev.start)}';
-    return Row(
-      children: [
-        Expanded(
-          child: _FlowCard(
-            label: 'Income',
-            amount: overview.month.income,
-            change: formatChange(percentChange(overview.month.income, overview.previous.income)),
-            caption: caption,
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: _FlowCard(
-            label: 'Expense',
-            amount: overview.month.expense,
-            change: formatChange(percentChange(overview.month.expense, overview.previous.expense)),
-            caption: caption,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _FlowCard extends StatelessWidget {
-  const _FlowCard({required this.label, required this.amount, required this.change, required this.caption});
-  final String label;
-  final int amount;
-  final String change;
-  final String caption;
-
-  @override
-  Widget build(BuildContext context) => FinCard(
-    padding: const EdgeInsets.all(14),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('$label bulan ini', style: context.text.bodySmall, maxLines: 1, overflow: TextOverflow.ellipsis),
-        const SizedBox(height: 4),
-        FittedBox(
-          fit: BoxFit.scaleDown,
-          alignment: Alignment.centerLeft,
-          child: AmountText(amount, style: context.text.titleMedium),
-        ),
-        const SizedBox(height: 4),
-        Text(change, style: context.text.labelMedium),
-        Text(caption, style: context.text.labelSmall, maxLines: 1, overflow: TextOverflow.ellipsis),
-      ],
-    ),
-  );
 }

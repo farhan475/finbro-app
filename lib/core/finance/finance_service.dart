@@ -60,7 +60,8 @@ class BudgetUsageItem {
   double get usage => budgetUsage(actual, budget.amount);
   int get variance => budgetVariance(budget.amount, actual);
   BudgetStatus get status => budgetStatus(
-    usage,
+    actual,
+    budget.amount,
     attention: budget.attentionThreshold,
     warning: budget.warningThreshold,
     over: budget.overThreshold,

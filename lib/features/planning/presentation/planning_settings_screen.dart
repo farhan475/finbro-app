@@ -202,7 +202,7 @@ class _PlanningFormState extends ConsumerState<_PlanningForm> {
         SegmentedButton<int>(
           segments: [
             for (final m in emergencyLookbackOptions)
-              ButtonSegment(value: m, label: Text('$m bulan')),
+              ButtonSegment(value: m, label: SegmentLabel('$m bulan')),
           ],
           selected: {_lookback},
           showSelectedIcon: false,

@@ -26,7 +26,7 @@ class AppearanceScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final current = ref.watch(appSettingsProvider).value?[SettingKeys.themeMode] ?? 'system';
+    final current = ref.watch(appSettingsProvider.select((s) => s.value?[SettingKeys.themeMode])) ?? 'system';
     final icons = {'system': Icons.brightness_auto_outlined, 'light': Icons.light_mode_outlined, 'dark': Icons.dark_mode_outlined};
     return Scaffold(
       appBar: AppBar(title: const Text('Tampilan')),
@@ -50,8 +50,8 @@ class AppearanceScreen extends ConsumerWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            'FinBro memakai tampilan monokrom; warna hanya dipakai untuk status data '
-            '(positif, negatif, peringatan).',
+            'FinBro memakai tampilan monokrom dengan aksen hijau untuk seleksi, progress dan grafik; '
+            'warna status dipakai untuk data (positif, negatif, peringatan).',
             style: context.text.bodySmall!.copyWith(color: context.fin.muted),
           ),
         ],

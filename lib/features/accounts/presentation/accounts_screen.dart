@@ -151,7 +151,7 @@ class AccountRow extends StatelessWidget {
             Flexible(
               child: Align(
                 alignment: Alignment.centerRight,
-                child: AmountText(item.balance, style: context.text.titleSmall),
+                child: AmountText(item.balance, alertNegative: true, style: context.text.titleSmall),
               ),
             ),
           ],

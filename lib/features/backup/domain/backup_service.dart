@@ -17,8 +17,20 @@ import '../../../core/storage/attachment_storage.dart';
 import '../../../core/utilities/app_logger.dart';
 import '../../../core/utilities/ids.dart';
 import 'backup_manifest.dart';
+import 'integrity_check.dart' show integrityReportKey;
 
 export 'backup_manifest.dart';
+
+/// Settings that describe this device, not the data: stripped from every
+/// backup and kept as they are on the device when a backup is restored.
+const deviceLocalSettingKeys = <String>[
+  SettingKeys.pinHash,
+  SettingKeys.pinSalt,
+  SettingKeys.biometricEnabled,
+  SettingKeys.lockTimeoutSeconds,
+  SettingKeys.pinLimiter,
+  integrityReportKey,
+];
 
 /// `<app documents>/backups`, where every backup and safety snapshot is kept.
 Future<Directory> defaultBackupsDirectory() async {
@@ -98,6 +110,8 @@ class BackupService {
       late final int accounts;
       late final List<Attachment> rows;
       try {
+        // PIN hash/salt and lock settings never leave the device in a backup.
+        await (snapshot.delete(snapshot.appSettings)..where((s) => s.key.isIn(deviceLocalSettingKeys))).go();
         transactions = await _count(snapshot, 'transactions');
         accounts = await _count(snapshot, 'accounts');
         rows = await snapshot.select(snapshot.attachments).get();
@@ -165,7 +179,7 @@ class BackupService {
     await db.into(db.backups).insert(
       BackupsCompanion.insert(
         id: newId(),
-        fileName: package.fileName,
+        fileName: p.basename(file.path),
         schemaVersion: '${package.manifest.schemaVersion}',
         createdAt: now,
         note: const Value('manual'),
@@ -206,11 +220,31 @@ class BackupService {
     required DatabaseReplacer replaceDatabase,
   }) async {
     final snapshot = await createSafetySnapshot(now);
+    // The restored DB carries the settings of its own past, so it would
+    // forget backups made since (and the backup itself was written after its
+    // VACUUM copy). Keep the newer of the live value and the backup date.
+    final live = DateTime.tryParse(await AppSettingsRepository(db).get(SettingKeys.lastBackupAt) ?? '');
+    final created = backup.manifest.createdAt;
+    final lastBackupAt = live != null && live.isAfter(created) ? live : created;
     // Resolve directories while the live DB is still open.
     final attachments = await attachmentsDir();
     final work = await workDir();
+    final deviceSettings = <String, String>{};
+    final settings = AppSettingsRepository(db);
+    for (final key in deviceLocalSettingKeys) {
+      if (key == integrityReportKey) continue; // describes the old data, not the device
+      final v = await settings.get(key);
+      if (v != null) deviceSettings[key] = v;
+    }
     await replaceDatabase(
-      (dbFile) => installBackup(backup, dbFile: dbFile, attachmentsDir: attachments, workDir: work),
+      (dbFile) => installBackup(
+        backup,
+        dbFile: dbFile,
+        attachmentsDir: attachments,
+        workDir: work,
+        lastBackupAt: lastBackupAt,
+        deviceSettings: deviceSettings,
+      ),
     );
     return snapshot;
   }
@@ -301,6 +335,8 @@ class BackupService {
     required File dbFile,
     required Directory attachmentsDir,
     required Directory workDir,
+    DateTime? lastBackupAt,
+    Map<String, String> deviceSettings = const {},
   }) async {
     final stageDir = await workDir.createTemp('finbro-restore-');
     final created = <File>[];
@@ -327,11 +363,30 @@ class BackupService {
           throw BackupException('Database di dalam backup rusak: ${structural.first}');
         }
         await stagedDb.transaction(() async {
+          final restoredIds = <String>{};
           for (final e in backup.manifest.attachmentFiles.entries) {
             final path = pathForEntry[e.value];
             if (path == null) continue;
+            restoredIds.add(e.key);
             await (stagedDb.update(stagedDb.attachments)..where((a) => a.id.equals(e.key)))
                 .write(AttachmentsCompanion(localPath: Value(path)));
+          }
+          // The backup DB is untrusted: a row whose file did not come from the
+          // zip could point anywhere (later deleted or re-backed-up). Point it
+          // at a not-yet-existing file inside the attachments folder.
+          for (final a in await stagedDb.select(stagedDb.attachments).get()) {
+            if (restoredIds.contains(a.id)) continue;
+            await (stagedDb.update(stagedDb.attachments)..where((x) => x.id.equals(a.id))).write(
+              AttachmentsCompanion(localPath: Value(p.join(attachmentsDir.path, 'missing-${a.id}'))),
+            );
+          }
+          // Lock settings belong to this device, never to the backup.
+          await (stagedDb.delete(stagedDb.appSettings)..where((s) => s.key.isIn(deviceLocalSettingKeys))).go();
+          for (final e in deviceSettings.entries) {
+            await AppSettingsRepository(stagedDb).set(e.key, e.value);
+          }
+          if (lastBackupAt != null) {
+            await AppSettingsRepository(stagedDb).set(SettingKeys.lastBackupAt, isoLocal(lastBackupAt));
           }
         });
         for (final a in await stagedDb.select(stagedDb.attachments).get()) {
@@ -366,10 +421,17 @@ class BackupService {
     }
   }
 
+  /// Writes [package] under its own name, or `-2`, `-3`, … when that file
+  /// exists, so a backup or safety snapshot never overwrites an earlier one
+  /// (two restores within a minute must keep the original data).
   Future<File> _writeToBackups(BackupPackage package) async {
     final dir = await backupsDir();
     await dir.create(recursive: true);
-    final file = File(p.join(dir.path, package.fileName));
+    final base = p.basenameWithoutExtension(package.fileName);
+    var file = File(p.join(dir.path, package.fileName));
+    for (var n = 2; await file.exists(); n++) {
+      file = File(p.join(dir.path, '$base-$n.zip'));
+    }
     return file.writeAsBytes(package.bytes, flush: true);
   }
 

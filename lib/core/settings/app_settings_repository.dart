@@ -17,8 +17,9 @@ abstract final class SettingKeys {
   static const pinSalt = 'pin_salt';
   static const biometricEnabled = 'biometric_enabled';
   static const lockTimeoutSeconds = 'lock_timeout_seconds'; // default 60
+  static const pinLimiter = 'pin_limiter'; // JSON {failures, until}; device-local
   static const lastBackupAt = 'last_backup_at'; // ISO local
-  static const cleanShutdown = 'clean_shutdown'; // true | false
+  static const hideBalance = 'hide_balance'; // true | false (Home eye toggle)
 }
 
 final appSettingsRepositoryProvider = Provider<AppSettingsRepository>(
@@ -31,13 +32,23 @@ final appSettingsProvider = StreamProvider<Map<String, String>>(
 );
 
 final themeModeProvider = Provider<ThemeMode>((ref) {
-  final v = ref.watch(appSettingsProvider).value?[SettingKeys.themeMode];
+  final v = ref.watch(appSettingsProvider.select((s) => s.value?[SettingKeys.themeMode]));
   return switch (v) {
     'light' => ThemeMode.light,
     'dark' => ThemeMode.dark,
     _ => ThemeMode.system,
   };
 });
+
+/// Trimmed user name ('' when unset). Rebuilds only when the name changes.
+final userNameProvider = Provider<String>(
+  (ref) => ref.watch(appSettingsProvider.select((s) => s.value?[SettingKeys.userName]))?.trim() ?? '',
+);
+
+/// Home eye toggle. Rebuilds only when the flag changes.
+final hideBalanceProvider = Provider<bool>(
+  (ref) => ref.watch(appSettingsProvider.select((s) => s.value?[SettingKeys.hideBalance] == 'true')),
+);
 
 class AppSettingsRepository {
   AppSettingsRepository(this.db);
@@ -61,11 +72,14 @@ class AppSettingsRepository {
   Future<int> getInt(String key, {required int fallback}) async =>
       int.tryParse(await get(key) ?? '') ?? fallback;
 
-  Future<void> set(String key, String value) => db
-      .into(db.appSettings)
-      .insertOnConflictUpdate(
-        AppSettingsCompanion.insert(key: key, value: value, updatedAt: DateTime.now()),
-      );
+  /// Upserts [key]; a no-op (no write, no stream/table notification) when
+  /// the stored value is already [value].
+  Future<void> set(String key, String value) => db.transaction(() async {
+    if (await get(key) == value) return;
+    await db.into(db.appSettings).insertOnConflictUpdate(
+      AppSettingsCompanion.insert(key: key, value: value, updatedAt: DateTime.now()),
+    );
+  });
 
   Future<void> setBool(String key, bool value) => set(key, value.toString());
 

@@ -15,6 +15,11 @@ abstract final class ImagePreprocessor {
   /// better; ML Kit recommends ~16px character height, well within this.
   static const maxSide = 2400;
 
+  /// Longest side of a source image: the picker downsizes photos to it and
+  /// cropping never decodes larger, bounding memory on high-megapixel cameras
+  /// while leaving a small crop enough detail.
+  static const maxSourceSide = 4000.0;
+
   /// Directory for temporary scan copies (cleared by [discard]).
   static Future<Directory> tempDir() async {
     final dir = Directory(p.join((await getTemporaryDirectory()).path, 'scan'));
@@ -39,9 +44,12 @@ abstract final class ImagePreprocessor {
       buffer.dispose();
       return path;
     }
-    // Decode at full resolution only when cropping, so the kept region keeps
-    // its detail; otherwise decode straight to the downscaled size.
-    final decodeScale = crop.isFull && math.max(w, h) > maxSide ? maxSide / math.max(w, h) : 1.0;
+    // Decode only as large as the kept region needs to come out at about
+    // [maxSide] (a full-frame image straight to the downscaled size), and
+    // never above [maxSourceSide] so a huge photo cannot exhaust memory.
+    final (srcW, srcH) = turns.isOdd ? (h, w) : (w, h);
+    final cropLongest = math.max((crop.right - crop.left) * srcW, (crop.bottom - crop.top) * srcH);
+    final decodeScale = [1.0, maxSide / cropLongest, maxSourceSide / math.max(w, h)].reduce(math.min);
     final codec = await descriptor.instantiateCodec(
       targetWidth: (w * decodeScale).round(),
       targetHeight: (h * decodeScale).round(),

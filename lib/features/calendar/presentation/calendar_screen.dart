@@ -191,22 +191,24 @@ class _DayCell extends StatelessWidget {
         child: Container(
           height: 52,
           margin: const EdgeInsets.all(1.5),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            color: isToday ? fin.surface2 : null,
-            border: isToday ? Border.all(color: fin.text) : null,
-          ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text(
-                '${date.day}',
-                style: context.text.bodyMedium?.copyWith(
-                  fontWeight: isToday ? FontWeight.w700 : FontWeight.w400,
-                  color: future ? fin.muted : fin.text,
+              // Today: filled accent circle (reference), bold number.
+              Container(
+                width: 30,
+                height: 30,
+                alignment: Alignment.center,
+                decoration: isToday ? BoxDecoration(color: fin.accent, shape: BoxShape.circle) : null,
+                child: Text(
+                  '${date.day}',
+                  style: context.text.bodyMedium?.copyWith(
+                    fontWeight: isToday ? FontWeight.w700 : FontWeight.w400,
+                    color: isToday ? fin.onAccent : (future ? fin.muted : fin.text),
+                  ),
                 ),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 2),
               SizedBox(
                 height: 11,
                 child: Row(

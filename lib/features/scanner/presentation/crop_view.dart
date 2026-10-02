@@ -4,6 +4,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 import '../../../app/theme/app_theme.dart';
+import '../../../core/utilities/app_logger.dart';
+import '../../../shared/widgets/fin_widgets.dart';
 import '../domain/crop_geometry.dart';
 
 /// Result of the crop step: clockwise quarter turns + region in rotated
@@ -13,10 +15,13 @@ typedef CropChoice = ({int quarterTurns, CropRect crop});
 /// Crop + rotate step before OCR (07-ocr §3). Drag corners to resize, drag
 /// inside to move. Nothing is written until the user continues.
 class CropView extends StatefulWidget {
-  const CropView({super.key, required this.imagePath, required this.onDone});
+  const CropView({super.key, required this.imagePath, required this.onDone, required this.onBack});
 
   final String imagePath;
   final ValueChanged<CropChoice> onDone;
+
+  /// Back to the source picker (used when the image cannot be decoded).
+  final VoidCallback onBack;
 
   @override
   State<CropView> createState() => _CropViewState();
@@ -24,6 +29,7 @@ class CropView extends StatefulWidget {
 
 class _CropViewState extends State<CropView> {
   ui.Image? _image;
+  bool _failed = false;
   int _turns = 0;
   CropRect _crop = CropRect.full;
   CropCorner? _dragCorner;
@@ -38,16 +44,26 @@ class _CropViewState extends State<CropView> {
   }
 
   Future<void> _load() async {
-    // Decode a screen-sized preview (EXIF orientation applied by the codec).
-    final bytes = await File(widget.imagePath).readAsBytes();
-    final codec = await ui.instantiateImageCodec(bytes, targetWidth: 1200);
-    final frame = await codec.getNextFrame();
-    codec.dispose();
-    if (!mounted) {
-      frame.image.dispose();
+    final ui.Image image;
+    try {
+      // Decode a screen-sized preview (EXIF orientation applied by the codec).
+      final bytes = await File(widget.imagePath).readAsBytes();
+      final codec = await ui.instantiateImageCodec(bytes, targetWidth: 1200);
+      try {
+        image = (await codec.getNextFrame()).image;
+      } finally {
+        codec.dispose();
+      }
+    } catch (e, s) {
+      AppLogger.error('Gambar scan tidak dapat dibuka', e, s);
+      if (mounted) setState(() => _failed = true);
       return;
     }
-    setState(() => _image = frame.image);
+    if (!mounted) {
+      image.dispose();
+      return;
+    }
+    setState(() => _image = image);
   }
 
   @override
@@ -63,6 +79,17 @@ class _CropViewState extends State<CropView> {
 
   @override
   Widget build(BuildContext context) {
+    if (_failed) {
+      return Center(
+        child: EmptyState(
+          icon: Icons.broken_image_outlined,
+          title: 'Gambar tidak dapat dibuka',
+          message: 'File rusak atau formatnya tidak didukung. Pilih gambar lain.',
+          actionLabel: 'Pilih gambar lain',
+          onAction: widget.onBack,
+        ),
+      );
+    }
     final image = _image;
     return Column(
       children: [

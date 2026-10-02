@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/app_database.dart';
 import '../providers.dart';
+import '../storage/attachment_storage.dart';
 import '../utilities/app_logger.dart';
 import '../utilities/ids.dart';
 
@@ -104,9 +105,13 @@ class LedgerService {
   final AppDatabase db;
   final List<LedgerListener> Function() _listeners;
 
+  /// [inTransaction] runs inside the same SQLite transaction after the
+  /// insert (e.g. closing the recurring instance it confirms); throwing
+  /// there rolls the whole posting back.
   Future<String> create(
     TransactionDraft d, {
     TransactionStatus status = TransactionStatus.confirmed,
+    Future<void> Function(String id)? inTransaction,
   }) async {
     final id = newId();
     final row = await db.transaction(() async {
@@ -132,6 +137,7 @@ class LedgerService {
         ),
       );
       await _insertAttachments(id, d.attachments);
+      await inTransaction?.call(id);
       return _get(id);
     });
     await _notify(LedgerChange(after: row));
@@ -181,7 +187,9 @@ class LedgerService {
   }
 
   /// FR-TRX-005. Removes linked goal movements (and rebuilds goal caches),
-  /// reopens a linked recurring instance, then deletes attachment files.
+  /// reopens a linked recurring instance (or closes it as skipped when its
+  /// rule auto-confirms, so the next sync does not post it again), then
+  /// deletes attachment files.
   Future<void> delete(String id) async {
     late LedgerTransaction before;
     final files = await db.transaction(() async {
@@ -200,20 +208,32 @@ class LedgerService {
       for (final g in goalIds) {
         await recomputeGoalAmount(db, g);
       }
-      await (db.update(db.recurringInstances)
-            ..where((i) => i.transactionId.equals(id)))
-          .write(
-            RecurringInstancesCompanion(
-              status: const Value(RecurringStatus.pending),
-              transactionId: const Value(null),
-              updatedAt: Value(DateTime.now()),
-            ),
-          );
+      final linked = await (db.select(db.recurringInstances).join([
+        innerJoin(db.recurringRules, db.recurringRules.id.equalsExp(db.recurringInstances.recurringRuleId)),
+      ])..where(db.recurringInstances.transactionId.equals(id)))
+          .get();
+      for (final row in linked) {
+        final inst = row.readTable(db.recurringInstances);
+        final autoConfirm = row.readTable(db.recurringRules).autoConfirm;
+        await (db.update(db.recurringInstances)..where((i) => i.id.equals(inst.id))).write(
+          RecurringInstancesCompanion(
+            status: Value(autoConfirm ? RecurringStatus.skipped : RecurringStatus.pending),
+            transactionId: const Value(null),
+            updatedAt: Value(DateTime.now()),
+          ),
+        );
+      }
       await (db.delete(db.transactions)..where((t) => t.id.equals(id))).go();
       return atts.map((a) => a.localPath).toList();
     });
     for (final path in files) {
       try {
+        // local_path may come from a restored backup: never delete outside
+        // the attachments directory.
+        if (!await AttachmentStorage.isManaged(path)) {
+          AppLogger.info('Attachment di luar penyimpanan aplikasi tidak dihapus: $path');
+          continue;
+        }
         final f = File(path);
         if (await f.exists()) await f.delete();
       } catch (e, s) {
@@ -223,7 +243,8 @@ class LedgerService {
     await _notify(LedgerChange(before: before));
   }
 
-  /// FR-TRX-006: copy with current timestamp, no attachments.
+  /// FR-TRX-006: copy with current timestamp, no attachments. A draft stays
+  /// a draft (never becomes a balance-changing row by duplication).
   Future<String> duplicate(String id, {DateTime? at}) async {
     final src = await _get(id);
     final d = TransactionDraft.fromRow(src);
@@ -237,6 +258,7 @@ class LedgerService {
         transactionAt: at ?? DateTime.now(),
         note: d.note,
       ),
+      status: src.status == TransactionStatus.draft ? TransactionStatus.draft : TransactionStatus.confirmed,
     );
   }
 
@@ -306,6 +328,11 @@ class LedgerService {
         .getSingleOrNull();
     if (cat == null) {
       throw const LedgerValidationException('Kategori tidak ditemukan.');
+    }
+    // Archived categories keep history but accept no new postings.
+    final categoryUnchanged = previous != null && previous.categoryId == catId;
+    if (!cat.isActive && !categoryUnchanged) {
+      throw LedgerValidationException('Kategori ${cat.name} sudah diarsipkan.');
     }
     final expected = d.type == TransactionType.income
         ? CategoryType.income

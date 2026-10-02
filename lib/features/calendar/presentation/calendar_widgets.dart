@@ -4,7 +4,8 @@ import '../../../app/theme/app_theme.dart';
 import '../../../core/database/app_database.dart';
 
 /// Activity state marker; the shape (not only color) carries the meaning:
-/// ACTIVE = filled dot, NO_ACTIVITY = dash, UNKNOWN = hollow ring.
+/// ACTIVE = filled dot (amber, "Recorded" in the reference), NO_ACTIVITY =
+/// accent dash, UNKNOWN = hollow ring.
 class ActivityMarker extends StatelessWidget {
   const ActivityMarker(this.status, {super.key});
   final ActivityStatus status;
@@ -16,12 +17,12 @@ class ActivityMarker extends StatelessWidget {
       ActivityStatus.active => Container(
         width: 7,
         height: 7,
-        decoration: BoxDecoration(color: fin.text, shape: BoxShape.circle),
+        decoration: BoxDecoration(color: fin.warning, shape: BoxShape.circle),
       ),
       ActivityStatus.noActivity => Container(
         width: 10,
         height: 2,
-        decoration: BoxDecoration(color: fin.muted, borderRadius: BorderRadius.circular(1)),
+        decoration: BoxDecoration(color: fin.accent, borderRadius: BorderRadius.circular(1)),
       ),
       ActivityStatus.unknown => Container(
         width: 7,

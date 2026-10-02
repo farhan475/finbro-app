@@ -29,20 +29,42 @@ class FinCard extends StatelessWidget {
   }
 }
 
+/// Single-line SegmentedButton label: shrinks at large font scales instead of
+/// wrapping mid-word ("Expens/e") inside the fixed-width segment.
+class SegmentLabel extends StatelessWidget {
+  const SegmentLabel(this.text, {super.key});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) =>
+      FittedBox(fit: BoxFit.scaleDown, child: Text(text, maxLines: 1, softWrap: false));
+}
+
 /// Rupiah amount. [colorize] tints positive/negative, always with a sign so
-/// state is not conveyed by color alone.
+/// state is not conveyed by color alone. [alertNegative] tints only a
+/// negative value red (balances, net cash flow); expense amounts stay neutral.
 class AmountText extends StatelessWidget {
-  const AmountText(this.amount, {super.key, this.style, this.colorize = false, this.signed = false});
+  const AmountText(
+    this.amount, {
+    super.key,
+    this.style,
+    this.colorize = false,
+    this.signed = false,
+    this.alertNegative = false,
+  });
 
   final int amount;
   final TextStyle? style;
   final bool colorize;
   final bool signed;
+  final bool alertNegative;
 
   @override
   Widget build(BuildContext context) {
     final fin = context.fin;
-    final color = !colorize || amount == 0 ? null : (amount > 0 ? fin.positive : fin.negative);
+    final color = colorize && amount != 0
+        ? (amount > 0 ? fin.positive : fin.negative)
+        : (alertNegative && amount < 0 ? fin.negative : null);
     return Text(
       formatRupiah(amount, signed: signed || colorize),
       style: (style ?? context.text.bodyMedium)!.copyWith(
@@ -72,10 +94,7 @@ class SectionHeader extends StatelessWidget {
           if (actionLabel != null)
             TextButton(
               onPressed: onAction,
-              style: TextButton.styleFrom(
-                foregroundColor: context.fin.muted,
-                visualDensity: VisualDensity.compact,
-              ),
+              style: TextButton.styleFrom(foregroundColor: context.fin.muted, visualDensity: VisualDensity.compact),
               child: Text(actionLabel!),
             ),
         ],
@@ -125,18 +144,26 @@ class EmptyState extends StatelessWidget {
 
 /// Color + text label for a budget status (accessibility: never color only).
 extension BudgetStatusStyle on BudgetStatus {
+  /// Bar/graphic color.
   Color color(FinColors fin) => switch (this) {
-    BudgetStatus.normal => fin.primary,
-    BudgetStatus.attention => fin.primary,
+    BudgetStatus.normal => fin.accent,
+    BudgetStatus.attention => fin.accent,
     BudgetStatus.warning => fin.warning,
     BudgetStatus.reached => fin.warning,
     BudgetStatus.over => fin.negative,
   };
+
+  /// Label color: like [color], but the accent swaps to its legible text tone.
+  Color textColor(FinColors fin) => switch (this) {
+    BudgetStatus.normal || BudgetStatus.attention => fin.accentText,
+    _ => color(fin),
+  };
 }
 
-/// Animated progress bar; [percent] may exceed 100 (bar is clamped).
+/// Animated progress bar; [percent] may exceed 100 (bar is clamped). Accent
+/// on an accent-tinted track by default (reference UI).
 class FinProgressBar extends StatelessWidget {
-  const FinProgressBar({super.key, required this.percent, this.color, this.height = 8});
+  const FinProgressBar({super.key, required this.percent, this.color, this.height = 6});
 
   final double percent;
   final Color? color;
@@ -155,8 +182,8 @@ class FinProgressBar extends StatelessWidget {
         builder: (context, value, _) => LinearProgressIndicator(
           value: value,
           minHeight: height,
-          backgroundColor: fin.surface2,
-          color: color ?? fin.primary,
+          backgroundColor: fin.accentSoft,
+          color: color ?? fin.accent,
         ),
       ),
     );
@@ -207,7 +234,10 @@ class RupiahInputFormatter extends TextInputFormatter {
     final v = parseRupiah(newValue.text);
     if (v == null) return const TextEditingValue();
     final text = _thousands.format(v);
-    return TextEditingValue(text: text, selection: TextSelection.collapsed(offset: text.length));
+    return TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
   }
 }
 

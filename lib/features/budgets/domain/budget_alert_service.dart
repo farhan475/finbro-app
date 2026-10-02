@@ -45,13 +45,13 @@ Future<void> _showNotification(BudgetAlert a) => NotificationService.instance.sh
   alert: true,
 );
 
-/// Alert level of [b] at [usage] (percentage points): the highest crossed
-/// threshold (attention / warning / over), or `overThreshold + 1` once usage
-/// is strictly above the over threshold ("melewati budget", status over).
-/// Null while below every threshold.
-int? budgetAlertLevel(double usage, Budget b) {
-  if (usage > b.overThreshold) return b.overThreshold + 1;
-  return crossedThreshold(usage, [b.attentionThreshold, b.warningThreshold, b.overThreshold]);
+/// Alert level of [b] at [actual] spent: the highest crossed threshold
+/// (attention / warning / over), or `overThreshold + 1` once usage is
+/// strictly above the over threshold ("melewati budget", status over).
+/// Null while below every threshold. Integer math, no float rounding.
+int? budgetAlertLevel(int actual, Budget b) {
+  if (b.amount > 0 && actual * 100 > b.overThreshold * b.amount) return b.overThreshold + 1;
+  return crossedThreshold(actual, b.amount, [b.attentionThreshold, b.warningThreshold, b.overThreshold]);
 }
 
 /// FR-NOT-002 / 08 §3: after a confirmed expense changes, notify when a
@@ -106,7 +106,7 @@ class BudgetAlertService {
   Future<void> _evaluate(Budget b) async {
     final actual = await finance.budgetActual(b);
     final usage = budgetUsage(actual, b.amount);
-    final level = budgetAlertLevel(usage, b);
+    final level = budgetAlertLevel(actual, b);
     final stored = b.lastNotifiedThreshold;
     if (level == stored) return;
 
@@ -131,7 +131,8 @@ class BudgetAlertService {
     final pct = formatPercent(usage);
     final amounts = '${formatRupiah(actual)} dari ${formatRupiah(b.amount)}';
     final status = budgetStatus(
-      usage,
+      actual,
+      b.amount,
       attention: b.attentionThreshold,
       warning: b.warningThreshold,
       over: b.overThreshold,

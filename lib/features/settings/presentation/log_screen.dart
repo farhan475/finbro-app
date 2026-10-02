@@ -57,6 +57,7 @@ class _LogScreenState extends ConsumerState<LogScreen> {
   }
 
   Future<void> _checkNow() async {
+    if (!mounted) return;
     setState(() => _checking = true);
     try {
       final report = await ref.read(startupChecksProvider).checkNow(ref.read(clockProvider)());

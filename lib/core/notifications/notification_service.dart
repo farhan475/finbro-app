@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' show DartPluginRegistrant;
@@ -7,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:timezone/data/latest_all.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 
@@ -61,6 +63,9 @@ abstract final class NotificationIds {
   /// Recurring instance reminder in [1_000_000, 9_999_999].
   static int recurring(String instanceId) => 1000000 + _hash(instanceId) % 9000000;
 
+  /// Whether [id] is in the [recurring] range.
+  static bool isRecurring(int id) => id >= 1000000 && id < 10000000;
+
   /// Budget alert in [100, 999_999].
   static int budget(String budgetId) => 100 + _hash(budgetId) % 999000;
 
@@ -74,6 +79,8 @@ abstract final class NotificationIds {
   }
 }
 
+// Private: on a secure lock screen Android shows only the generic system
+// version ("FinBro", content hidden), never amounts or account names.
 const _channelReminders = AndroidNotificationDetails(
   'finbro_reminders',
   'Pengingat',
@@ -81,6 +88,7 @@ const _channelReminders = AndroidNotificationDetails(
   importance: Importance.defaultImportance,
   priority: Priority.defaultPriority,
   icon: 'ic_stat_finbro',
+  visibility: NotificationVisibility.private,
 );
 
 const _channelAlerts = AndroidNotificationDetails(
@@ -90,11 +98,20 @@ const _channelAlerts = AndroidNotificationDetails(
   importance: Importance.high,
   priority: Priority.high,
   icon: 'ic_stat_finbro',
+  visibility: NotificationVisibility.private,
 );
 
 const dailyCheckTitle = 'Daily check-in';
 const dailyCheckBody =
     'Belum ada transaksi yang tercatat hari ini. Apakah memang tidak ada aktivitas keuangan?';
+
+/// Payload of the daily check for [day] at [hour]:[minute]. The time is part
+/// of the payload so a pending request identifies its schedule exactly.
+Map<String, dynamic> dailyCheckPayload(DateTime day, {required int hour, required int minute}) => {
+  'kind': NotificationKind.dailyCheck,
+  'date': isoDate(day),
+  'time': '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}',
+};
 
 /// Local notifications only (offline). Scheduling is a no-op on platforms
 /// without zoned scheduling support (desktop dev builds).
@@ -104,11 +121,24 @@ class NotificationService {
 
   final _plugin = FlutterLocalNotificationsPlugin();
   bool _ready = false;
+  final _initialized = Completer<void>();
   NotificationEvent? _launchEvent;
 
   bool get _canSchedule => !kIsWeb && Platform.isAndroid;
 
+  /// Completes once [init] has finished (successfully or not). Schedule,
+  /// cancel and launch-event reads are only meaningful afterwards.
+  Future<void> get initialized => _initialized.future;
+
   Future<void> init({required void Function(NotificationEvent) onEvent}) async {
+    try {
+      await _init(onEvent);
+    } finally {
+      _initialized.complete();
+    }
+  }
+
+  Future<void> _init(void Function(NotificationEvent) onEvent) async {
     tzdata.initializeTimeZones();
     try {
       final info = await FlutterTimezone.getLocalTimezone();
@@ -203,6 +233,7 @@ class NotificationService {
             _channelReminders.channelName,
             channelDescription: _channelReminders.channelDescription,
             icon: _channelReminders.icon,
+            visibility: _channelReminders.visibility,
             styleInformation: BigTextStyleInformation(body),
             actions: actions,
           ),
@@ -220,7 +251,7 @@ class NotificationService {
         at: DateTime(day.year, day.month, day.day, hour, minute),
         title: dailyCheckTitle,
         body: dailyCheckBody,
-        payload: {'kind': NotificationKind.dailyCheck, 'date': isoDate(day)},
+        payload: dailyCheckPayload(day, hour: hour, minute: minute),
         actions: dailyCheckActions,
       );
 
@@ -239,9 +270,16 @@ class NotificationService {
     }
   }
 
-  Future<List<int>> pendingIds() async {
-    if (!_ready || !_canSchedule) return const [];
-    return [for (final r in await _plugin.pendingNotificationRequests()) r.id];
+  /// Pending scheduled notifications: id → encoded payload. One plugin call;
+  /// empty where scheduling is unavailable.
+  Future<Map<int, String?>> pendingPayloads() async {
+    if (!_ready || !_canSchedule) return const {};
+    try {
+      return {for (final r in await _plugin.pendingNotificationRequests()) r.id: r.payload};
+    } catch (e, s) {
+      AppLogger.error('Gagal membaca notifikasi terjadwal', e, s);
+      return const {};
+    }
   }
 }
 
@@ -262,18 +300,24 @@ const dailyCheckActions = [
 Future<void> notificationBackgroundHandler(NotificationResponse r) async {
   WidgetsFlutterBinding.ensureInitialized();
   DartPluginRegistrant.ensureInitialized();
-  final e = NotificationEvent.fromResponse(r);
-  if (e == null || e.kind != NotificationKind.dailyCheck) return;
-  final day = DateTime.parse(e.data['date'] as String);
-  if (e.actionId == NotificationAction.noTransaction) {
-    final db = AppDatabase.open(await databaseFile());
-    try {
-      await markNoActivity(db, day);
-    } finally {
-      await db.close();
+  try {
+    final e = NotificationEvent.fromResponse(r);
+    if (e == null || e.kind != NotificationKind.dailyCheck) return;
+    final day = DateTime.parse(e.data['date'] as String);
+    if (e.actionId == NotificationAction.noTransaction) {
+      final db = AppDatabase.open(await databaseFile());
+      try {
+        await markNoActivity(db, day);
+      } finally {
+        await db.close();
+      }
+    } else if (e.actionId == NotificationAction.remindLater) {
+      await scheduleRemindLater(day);
     }
-  } else if (e.actionId == NotificationAction.remindLater) {
-    await scheduleRemindLater(day);
+  } catch (e, s) {
+    // This isolate has no file logger; log into the app's log file directly.
+    await AppLogger.init(await getApplicationSupportDirectory());
+    AppLogger.error('Aksi notifikasi di latar belakang gagal', e, s);
   }
 }
 
@@ -313,6 +357,7 @@ Future<void> scheduleRemindLater(DateTime day) async {
         'finbro_reminders',
         'Pengingat',
         icon: 'ic_stat_finbro',
+        visibility: NotificationVisibility.private,
         // No "remind later" action here: remind later schedules only once.
         actions: [
           AndroidNotificationAction(

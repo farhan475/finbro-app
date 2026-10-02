@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/routes.dart';
+import '../../../app/shell.dart';
 import '../../../app/theme/app_theme.dart';
 import '../../../core/providers.dart';
 import '../../../core/settings/app_settings_repository.dart';
@@ -17,11 +18,12 @@ class MoreScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final name = ref.watch(appSettingsProvider).value?[SettingKeys.userName]?.trim() ?? '';
+    final name = ref.watch(userNameProvider);
     return Scaffold(
       body: SafeArea(
+        bottom: false,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          padding: EdgeInsets.fromLTRB(16, 16, 16, navBarClearance(context)),
           children: [
             Row(
               children: [
@@ -48,11 +50,11 @@ class MoreScreen extends ConsumerWidget {
             const SettingsSection(
               title: 'Fitur',
               children: [
+                NavTile(icon: Icons.flag_outlined, title: 'Tujuan Keuangan', route: Routes.goals),
                 NavTile(icon: Icons.account_balance_wallet_outlined, title: 'Akun', route: Routes.accounts),
                 NavTile(icon: Icons.category_outlined, title: 'Kategori', route: Routes.categories),
                 NavTile(icon: Icons.autorenew, title: 'Transaksi Berulang', route: Routes.recurring),
                 NavTile(icon: Icons.calendar_month_outlined, title: 'Kalender', route: Routes.calendar),
-                NavTile(icon: Icons.bar_chart, title: 'Laporan', route: Routes.reports),
                 NavTile(icon: Icons.monitor_heart_outlined, title: 'Financial Health', route: Routes.health),
                 NavTile(icon: Icons.document_scanner_outlined, title: 'Scan', route: Routes.scan),
               ],

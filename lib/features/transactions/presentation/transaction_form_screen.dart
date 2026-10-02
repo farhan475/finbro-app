@@ -329,9 +329,9 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
             const SizedBox(height: 16),
             SegmentedButton<TransactionType>(
               segments: const [
-                ButtonSegment(value: TransactionType.income, label: Text('Income')),
-                ButtonSegment(value: TransactionType.expense, label: Text('Expense')),
-                ButtonSegment(value: TransactionType.transfer, label: Text('Transfer')),
+                ButtonSegment(value: TransactionType.income, label: SegmentLabel('Income')),
+                ButtonSegment(value: TransactionType.expense, label: SegmentLabel('Expense')),
+                ButtonSegment(value: TransactionType.transfer, label: SegmentLabel('Transfer')),
               ],
               selected: {_type},
               showSelectedIcon: false,
@@ -454,8 +454,8 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
       children: [
         SegmentedButton<AttachmentKind>(
           segments: const [
-            ButtonSegment(value: AttachmentKind.receipt, label: Text('Struk'), icon: Icon(Icons.receipt_long_outlined)),
-            ButtonSegment(value: AttachmentKind.document, label: Text('Dokumen'), icon: Icon(Icons.description_outlined)),
+            ButtonSegment(value: AttachmentKind.receipt, label: SegmentLabel('Struk'), icon: Icon(Icons.receipt_long_outlined)),
+            ButtonSegment(value: AttachmentKind.document, label: SegmentLabel('Dokumen'), icon: Icon(Icons.description_outlined)),
           ],
           selected: {_attachmentKind},
           showSelectedIcon: false,

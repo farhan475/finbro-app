@@ -15,6 +15,7 @@ import '../../../core/utilities/app_logger.dart';
 import '../../../shared/widgets/category_icon.dart';
 import '../../../shared/widgets/fin_widgets.dart';
 import '../../accounts/data/account_repository.dart';
+import '../../calendar/domain/daily_check_service.dart';
 import '../../planning/data/planning_repository.dart';
 
 /// First-run flow: welcome → name → accounts → planning → reminder.
@@ -149,12 +150,23 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   Future<void> _finish() async {
+    // Read everything up front: saving onboardingDone makes the router
+    // redirect away, which may dispose this screen mid-way.
     final settings = ref.read(appSettingsRepositoryProvider);
+    final dailyCheck = ref.read(dailyCheckServiceProvider);
+    final now = ref.read(clockProvider)();
     await settings.set(SettingKeys.dailyCheckTime, formatTimeOfDay(_checkTime));
     await settings.setBool(SettingKeys.dailyCheckEnabled, _dailyCheck);
     await settings.setBool(SettingKeys.onboardingDone, true);
     AppLogger.info('Onboarding selesai');
     if (mounted) context.go(Routes.home);
+    // Lifecycle reschedules skip everything before onboarding is done; apply
+    // the chosen time/toggle now instead of waiting for the next resume.
+    try {
+      await dailyCheck.reschedule(now);
+    } catch (e, s) {
+      AppLogger.error('Penjadwalan daily check setelah onboarding gagal', e, s);
+    }
   }
 
   Future<void> _addAccount() async {

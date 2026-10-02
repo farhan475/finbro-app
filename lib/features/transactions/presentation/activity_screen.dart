@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/routes.dart';
+import '../../../app/shell.dart';
 import '../../../app/theme/app_theme.dart';
 import '../../../core/database/app_database.dart';
 import '../../../shared/providers/lookups.dart';
@@ -222,7 +223,7 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
     }
     final rows = dayGroupWidgets(context, groupByDay(page.items));
     return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 96),
+      padding: EdgeInsets.fromLTRB(16, 0, 16, navBarClearance(context, fab: true)),
       itemCount: rows.length + (page.hasMore ? 1 : 0),
       itemBuilder: (context, i) {
         if (i < rows.length) return rows[i];
