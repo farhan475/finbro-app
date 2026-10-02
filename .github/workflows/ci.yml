@@ -20,6 +20,12 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test
-      # Unsigned-key fallback: without android/key.properties the build uses the debug key,
-      # which is fine for CI. Release signing stays local.
+      # The release build refuses to run without android/key.properties, so CI
+      # signs with a throwaway key. Real release signing stays local.
+      - name: Throwaway signing key
+        run: |
+          keytool -genkeypair -keystore "$RUNNER_TEMP/ci.jks" -alias ci -keyalg RSA -keysize 2048 \
+            -validity 1 -storepass cipass -keypass cipass -dname "CN=FinBro CI"
+          printf 'storeFile=%s\nstorePassword=cipass\nkeyAlias=ci\nkeyPassword=cipass\n' \
+            "$RUNNER_TEMP/ci.jks" > android/key.properties
       - run: flutter build appbundle --release

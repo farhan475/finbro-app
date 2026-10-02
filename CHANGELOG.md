@@ -1,6 +1,13 @@
 # Changelog
 
 ## Unreleased
+- Changed: Net Amount Saved / Savings Rate count only net transfers into Savings accounts; goal contributions are goal progress, not savings (no double counting).
+- Fixed: future-dated transactions no longer change balances before their date; deleting an auto-confirmed recurring transaction is not re-posted; development allocation ignores goal adjustments; emergency average no longer diluted by months before the first transaction (and cannot be NaN); budget end date covers the whole calendar day.
+- Fixed: leaving the transaction form while saving no longer deletes the attachments being linked; back is blocked during save; the form's camera/gallery picker no longer triggers the app lock.
+- Security: relock timed on a monotonic clock plus the wall clock (clock rollback locks), exempt operations capped at 5 minutes; lock screen blocks keyboard focus and Back.
+- Security: restore checks `user_version` against the app and manifest, requires every table, drops triggers/views; size limits (512 MB zip, 256 MB per file, 1 GB unpacked), unknown entries rejected, too-large backups refused at creation; zip work off the UI thread; CSV neutralizes leading tab/CR; attachment deletes only inside app storage.
+- Performance: recurring reminders rescheduled only when changed; Home computes balances once; budget usage and 6-month trend in single queries; transaction lists page by cursor instead of re-querying from the start.
+- CI signs the release build with a throwaway key (the build refuses to run unsigned).
 - Security: FLAG_SECURE + no Recents thumbnail, INTERNET/ACCESS_NETWORK_STATE removed from the release manifest, device-transfer/cloud extraction disabled, deep linking off, release build refuses the debug key.
 - Fixed: backups/safety snapshots never overwrite an earlier file; PIN salt+hash written atomically.
 - Security: PIN hash/salt and lock settings are no longer included in backups and restore keeps this device's lock; wrong-PIN limiter persists across restarts with escalating cooldowns; restored attachment rows that did not come from the zip are neutralized.

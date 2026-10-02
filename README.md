@@ -6,10 +6,10 @@ Personal finance app for Android, offline-first, single user. The spec is the pl
 
 | Area | Choice |
 |---|---|
-| UI | Flutter 3.47 / Dart 3.13, Material 3, monochrome theme (light/dark), Inter font bundled offline |
-| Database | SQLite via Drift (`lib/core/database`), schema v1 with a migration layer |
+| UI | Flutter 3.47 / Dart 3.13, Material 3, monochrome surfaces + lime accent `#5BEB12` (light/dark), Inter font bundled offline |
+| Database | SQLite via Drift (`lib/core/database`), schema v2 (v1 frozen baseline + query indexes), stepwise migrations |
 | State | flutter_riverpod 3 (manual providers, no codegen) |
-| Routing | go_router (bottom nav: Home, Transaksi, Budget, Goals, More) |
+| Routing | go_router (bottom nav: Home, Transaksi, Budget, Analitik, Lainnya; Tujuan Keuangan from Lainnya/Home) |
 | Charts | fl_chart |
 | Notifications | flutter_local_notifications + timezone (local only) |
 | OCR | google_mlkit_text_recognition (on-device, Latin) |
@@ -42,7 +42,7 @@ Cross-feature hooks live in `lib/app/app_wiring.dart`:
 ```bash
 flutter pub get
 dart run build_runner build        # only after changing Drift tables
-flutter test                       # 174 tests
+flutter test
 flutter run -d <android-device>
 flutter build apk --release --split-per-abi   # per-CPU APKs, signed with the release key
 flutter build appbundle --release             # AAB for Play Store
@@ -53,7 +53,7 @@ flutter build appbundle --release             # AAB for Play Store
 - Keystore: `~/finbro-keys/finbro-release.jks` (alias `finbro`, RSA 4096, valid 10 000 days).
 - Passwords: `android/key.properties` (git-ignored), copy in `~/finbro-keys/key.properties`.
 - **Back up `~/finbro-keys/` somewhere safe.** Losing it means existing installs can never be updated.
-- Without `android/key.properties` the release build falls back to the debug key.
+- Without `android/key.properties` the release build fails (`GradleException`); it never falls back to the debug key.
 
 On desktop (Linux) the app runs for development. OCR, the camera, and notification scheduling are Android-only there.
 
@@ -71,7 +71,8 @@ On desktop (Linux) the app runs for development. OCR, the camera, and notificati
 - Emergency Fund balance = sum of active goals of type `emergency`.
 - Reserved money = active goal balances + the rest of this month's Family allocation + the manual user reserve.
 - Upcoming obligations = open recurring expenses due by the end of the current month.
-- Savings Rate numerator = net contributions to savings/emergency/development goals + net transfers into savings-type accounts, with no double counting.
+- Savings Rate numerator (Net Amount Saved) = net transfers into savings-type accounts from non-savings accounts. Goal contributions are earmarks and count only as goal progress, never as saved money, so nothing is counted twice (owner decision, 2 Okt 2026; replaces the earlier goals + transfers rule).
+- Account balances and Total Balance include confirmed transactions dated up to now; future-dated rows count from their date.
 - Daily check = per-date local notifications scheduled 30 days ahead and cancelled once a day is ACTIVE or NO_ACTIVITY. "Ingatkan nanti" fires once, +1 hour.
 - Recurring instances and auto-confirm are processed when the app opens or resumes. There is no background service.
 - No SQLCipher: the app relies on OS storage protection plus the app lock.
