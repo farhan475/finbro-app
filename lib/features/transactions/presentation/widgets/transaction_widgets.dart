@@ -11,9 +11,10 @@ import '../../domain/day_groups.dart';
 
 String sourceLabel(SourceType s) => switch (s) {
   SourceType.manual => 'Manual',
-  SourceType.receiptOcr => 'Scan struk',
-  SourceType.screenshot => 'Screenshot',
-  SourceType.recurring => 'Transaksi berulang',
+    SourceType.receiptOcr => 'Scan struk',
+    SourceType.screenshot => 'Screenshot',
+    SourceType.recurring => 'Transaksi berulang',
+    SourceType.statementImport => 'Impor mutasi',
 };
 
 /// Label for non-confirmed rows; null for confirmed.

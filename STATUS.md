@@ -6,7 +6,7 @@ Date: 2 Oktober 2026 · Version 1.0.0+1 · `id.finbro.app`
 
 ## Verified
 
-- `flutter analyze`: no issues. Full test suite passed 243 tests before the latest navbar/FAB adjustment; after that adjustment, `flutter analyze` stayed clean and the three targeted suites passed.
+- `flutter analyze`: no issues. Full test suite passed: 253 tests (2 Okt 2026, termasuk 6 test fitur impor CSV).
 - Diverifikasi di perangkat 1 Okt (sebelum perubahan 2 Okt), release build di Xiaomi 14T (Android 16 / HyperOS):
   - Onboarding, income/expense/transfer, edit/delete, transfer, budget alert 85%, konfirmasi gaji recurring.
   - Notifikasi: budget alert, reminder gaji, daily check (juga layar mati), "Nanti" +1 jam, "Tidak ada" dari background isolate; alarm dipulihkan setelah reboot.
@@ -65,7 +65,7 @@ Date: 2 Oktober 2026 · Version 1.0.0+1 · `id.finbro.app`
 | Notifikasi exact dengan fallback inexact | Selesai di Android; izin `SCHEDULE_EXACT_ALARM`, pengecekan izin, fallback, dan pengaturan sudah ada. Validasi perilaku pada perangkat masih perlu dilakukan. |
 | Multi-currency dengan kurs manual | Belum dikerjakan. Akun dan seluruh laporan saat ini memakai IDR. |
 | Widget home screen dengan perlindungan lock/sembunyikan saldo | Belum dikerjakan. Belum ada Android App Widget/provider. |
-| Impor mutasi bank CSV/PDF dengan review dan deteksi duplikat | Belum dikerjakan. |
+| Impor mutasi bank CSV/PDF dengan review dan deteksi duplikat | CSV selesai: parser 7 preset bank, layar tinjau (`/import`, menu Lainnya), kategori per baris, deteksi duplikat, sumber `statement_import`; test di `test/statement_import/`. PDF belum. |
 | Backup terenkripsi ke folder pilihan pengguna (SAF) | Selesai; backup terenkripsi folder sudah tersedia. |
 | Sinkronisasi cloud offline-first memakai format backup terenkripsi | Belum dikerjakan; butuh desain sinkronisasi dan endpoint/penyedia cloud. |
 

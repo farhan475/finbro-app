@@ -57,6 +57,7 @@ class MoreScreen extends ConsumerWidget {
                 NavTile(icon: Icons.calendar_month_outlined, title: 'Kalender', route: Routes.calendar),
                 NavTile(icon: Icons.monitor_heart_outlined, title: 'Financial Health', route: Routes.health),
                 NavTile(icon: Icons.document_scanner_outlined, title: 'Scan', route: Routes.scan),
+                NavTile(icon: Icons.receipt_long_outlined, title: 'Impor Mutasi Bank', route: Routes.statementImport),
               ],
             ),
             const SettingsGroup(),

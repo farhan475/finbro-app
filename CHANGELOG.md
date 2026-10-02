@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- New: bank statement CSV import (Lainnya → Impor Mutasi Bank). Detects BCA, Mandiri, BNI, BRI, Jago, SeaBank and blu exports; manual column mapping when detection is unsure; per-row category and include/exclude; duplicate warning against existing transactions; imported rows post as confirmed with source `statement_import`. PDF statements are not supported yet.
 - Security: backup restore now verifies the CRC32 of every unpacked zip entry against its header (archive 4.3.0 ignores its `verify` flag); corrupted entries are rejected instead of restored.
 - Security: the error log redacts drift `InvalidDataException` messages, which embed the rejected row's column values.
 - UI: floating navbar keeps the frosted-glass container but removes the selected pill; active icon and label use accent color and stronger weight only. Home add FAB is raised and Home scroll clearance is increased to avoid overlap.

@@ -33,6 +33,7 @@ abstract final class Routes {
 
   // Scan
   static const scan = '/scan';
+  static const statementImport = '/import';
 
   // Settings / reliability
   static const settings = '/settings';

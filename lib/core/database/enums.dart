@@ -73,7 +73,8 @@ enum SourceType implements DbEnum {
   manual('manual'),
   receiptOcr('receipt_ocr'),
   screenshot('screenshot'),
-  recurring('recurring');
+  recurring('recurring'),
+  statementImport('statement_import');
 
   const SourceType(this.db);
   @override

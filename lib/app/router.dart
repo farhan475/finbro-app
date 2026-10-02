@@ -9,6 +9,7 @@ import '../features/calendar/calendar_routes.dart';
 import '../features/dashboard/presentation/home_screen.dart';
 import '../features/goals/presentation/goals_screen.dart';
 import '../features/recurring/recurring_routes.dart';
+import '../features/statement_import/presentation/statement_import_screen.dart';
 import '../features/reports/reports_routes.dart';
 import '../features/scanner/scanner_routes.dart';
 import '../features/reports/presentation/reports_screen.dart';
@@ -62,6 +63,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       ...transactionsRoutes,
       ...budgetsRoutes,
       ...recurringRoutes,
+      GoRoute(
+        path: Routes.statementImport,
+        builder: (_, _) => const StatementImportEntryScreen(),
+      ),
       ...calendarRoutes,
       ...reportsRoutes,
       ...scannerRoutes,
