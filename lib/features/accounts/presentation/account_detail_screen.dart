@@ -15,6 +15,7 @@ import '../../transactions/data/transaction_query_repository.dart';
 import '../../transactions/domain/day_groups.dart';
 import '../../transactions/domain/transaction_filter.dart';
 import '../../transactions/ledger_paths.dart';
+import '../../transactions/presentation/transaction_pager.dart';
 import '../../transactions/presentation/widgets/transaction_widgets.dart';
 import '../data/account_repository.dart';
 import '../domain/reconciliation.dart';
@@ -34,7 +35,9 @@ enum _Action { edit, archive, unarchive, delete }
 
 class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
   final _actual = TextEditingController();
-  int _limit = transactionPageSize;
+  late final _pager = TransactionPager(() {
+    if (mounted) setState(() {});
+  });
   bool _busy = false;
 
   @override
@@ -179,10 +182,7 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
     final fin = context.fin;
     final balances = ref.watch(accountBalancesProvider(true)).value;
     final balance = balances?.where((b) => b.account.id == account.id).firstOrNull?.balance;
-    final pageAsync = ref.watch(
-      transactionPageProvider((filter: TransactionFilter(accountIds: {account.id}), limit: _limit)),
-    );
-    final page = pageAsync.value;
+    final pageAsync = _pager.watch(ref, TransactionFilter(accountIds: {account.id}));
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
@@ -252,9 +252,9 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
           ),
         ],
         const SectionHeader('Transaksi'),
-        if (page == null)
+        if (!_pager.loaded)
           AsyncView<TransactionPage>(value: pageAsync, builder: (_) => const SizedBox.shrink())
-        else if (page.items.isEmpty)
+        else if (_pager.rows.isEmpty)
           EmptyState(
             icon: Icons.receipt_long_outlined,
             title: 'Belum ada transaksi di account ini',
@@ -262,12 +262,12 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
             onAction: account.isActive ? () => context.push(LedgerPaths.transactionNewForAccount(account.id)) : null,
           )
         else ...[
-          ...dayGroupWidgets(context, groupByDay(page.items)),
-          if (page.hasMore)
+          ...dayGroupWidgets(context, groupByDay(_pager.rows)),
+          if (_pager.hasMore)
             Padding(
               padding: const EdgeInsets.only(top: 12),
               child: OutlinedButton(
-                onPressed: pageAsync.isLoading ? null : () => setState(() => _limit += transactionPageSize),
+                onPressed: pageAsync.isLoading || _pager.loadingMore ? null : () => _pager.loadMore(ref),
                 child: const Text('Muat lebih banyak'),
               ),
             ),

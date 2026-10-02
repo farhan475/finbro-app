@@ -14,6 +14,7 @@ import '../data/transaction_query_repository.dart';
 import '../domain/day_groups.dart';
 import '../domain/transaction_filter.dart';
 import 'filter_sheet.dart';
+import 'transaction_pager.dart';
 import 'widgets/transaction_widgets.dart';
 
 /// Bottom-nav tab "Transaksi": type chips, keyword search, filter sheet
@@ -30,11 +31,9 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
   final _search = TextEditingController();
   Timer? _debounce;
   TransactionFilter _filter = const TransactionFilter();
-  int _limit = transactionPageSize;
-
-  /// Last loaded page, shown while a bigger page or new filter loads so the
-  /// list does not flash empty.
-  TransactionPage? _lastPage;
+  late final _pager = TransactionPager(() {
+    if (mounted) setState(() {});
+  });
 
   @override
   void dispose() {
@@ -45,10 +44,7 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
 
   void _setFilter(TransactionFilter f) {
     if (f == _filter) return;
-    setState(() {
-      _filter = f;
-      _limit = transactionPageSize;
-    });
+    setState(() => _filter = f);
   }
 
   void _onKeyword(String text) {
@@ -77,10 +73,8 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final async = ref.watch(transactionPageProvider((filter: _filter, limit: _limit)));
-    if (async.hasValue) _lastPage = async.value;
-    final page = async.value ?? _lastPage;
-    final loading = async.isLoading;
+    final async = _pager.watch(ref, _filter);
+    final loading = async.isLoading || _pager.loadingMore;
     final sheetCount = _filter.sheetFilterCount;
 
     return Scaffold(
@@ -161,12 +155,12 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
             ),
           SizedBox(
             height: 2,
-            child: loading && page != null ? const LinearProgressIndicator(minHeight: 2) : null,
+            child: loading && _pager.loaded ? const LinearProgressIndicator(minHeight: 2) : null,
           ),
           Expanded(
-            child: page == null
-                ? AsyncView<TransactionPage>(value: async, builder: (_) => const SizedBox.shrink())
-                : _list(context, page, loading),
+            child: _pager.loaded
+                ? _list(context, loading)
+                : AsyncView<TransactionPage>(value: async, builder: (_) => const SizedBox.shrink()),
           ),
         ],
       ),
@@ -198,8 +192,8 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
     };
   }
 
-  Widget _list(BuildContext context, TransactionPage page, bool loading) {
-    if (page.items.isEmpty) {
+  Widget _list(BuildContext context, bool loading) {
+    if (_pager.rows.isEmpty) {
       return ListView(
         children: [
           if (_filter.isEmpty)
@@ -221,16 +215,16 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
         ],
       );
     }
-    final rows = dayGroupWidgets(context, groupByDay(page.items));
+    final rows = dayGroupWidgets(context, groupByDay(_pager.rows));
     return ListView.builder(
       padding: EdgeInsets.fromLTRB(16, 0, 16, navBarClearance(context, fab: true)),
-      itemCount: rows.length + (page.hasMore ? 1 : 0),
+      itemCount: rows.length + (_pager.hasMore ? 1 : 0),
       itemBuilder: (context, i) {
         if (i < rows.length) return rows[i];
         return Padding(
           padding: const EdgeInsets.only(top: 12),
           child: OutlinedButton(
-            onPressed: loading ? null : () => setState(() => _limit += transactionPageSize),
+            onPressed: loading ? null : () => _pager.loadMore(ref),
             child: const Text('Muat lebih banyak'),
           ),
         );

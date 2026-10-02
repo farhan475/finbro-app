@@ -157,6 +157,48 @@ void main() {
     });
   });
 
+  test('cursor pages walk every row exactly once across transactionAt ties', () async {
+    final tie = DateTime(2026, 9, 24, 12);
+    for (var i = 0; i < 4; i++) {
+      await expense(1000 + i, tie, note: 'Kopi $i');
+      await income(2000 + i, tie);
+    }
+    await expense(500, DateTime(2026, 9, 25), note: 'Kopi baru');
+    await income(600, DateTime(2026, 9, 23));
+    // Equal createdAt everywhere but one tied row: ties fall to createdAt,
+    // then rowid.
+    await db.update(db.transactions).write(TransactionsCompanion(createdAt: Value(created)));
+    await (db.update(db.transactions)..where((t) => t.amount.equals(1002)))
+        .write(TransactionsCompanion(createdAt: Value(created.add(const Duration(hours: 1)))));
+
+    // Bounded: a cursor that never advances must fail, not hang.
+    Future<List<String>> walk(TransactionFilter f, int limit) async {
+      final out = <String>[];
+      TransactionCursor? after;
+      for (var pages = 0; pages <= 10; pages++) {
+        final p = await repo.page(f, limit: limit, after: after);
+        out.addAll(p.items.map((t) => t.id));
+        if (!p.hasMore) return out;
+        after = p.next;
+      }
+      fail('cursor did not advance');
+    }
+
+    final cases = {
+      const TransactionFilter(): 10,
+      const TransactionFilter(type: TransactionType.expense): 5,
+      const TransactionFilter(keyword: 'kopi'): 5,
+      TransactionFilter(type: TransactionType.income, from: tie, to: tie): 4,
+    };
+    for (final MapEntry(key: f, value: count) in cases.entries) {
+      final all = await ids(f);
+      expect(all.toSet(), hasLength(count));
+      for (final limit in [1, 2, 3, 4]) {
+        expect(await walk(f, limit), all, reason: 'filter $f, page size $limit');
+      }
+    }
+  });
+
   test('filter equality ignores set order and keyword padding', () {
     expect(
       const TransactionFilter(categoryIds: {'a', 'b'}, keyword: 'kopi '),
