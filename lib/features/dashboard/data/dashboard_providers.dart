@@ -37,10 +37,16 @@ final homeOverviewProvider = FutureProvider<HomeOverview>((ref) async {
   final finance = ref.watch(financeServiceProvider);
   final month = Period.month(now);
   final previousPeriod = previousComparable(month, ReportScope.monthly, now);
+  final balances = await finance.accountBalances();
+  final summary = await finance.summary(month);
   return HomeOverview(
-    available: await finance.availableToSpendBreakdown(now),
-    balances: await finance.accountBalances(),
-    month: await finance.summary(month),
+    available: await finance.availableToSpendBreakdown(
+      now,
+      totalBalance: balances.fold<int>(0, (s, b) => s + b.balance),
+      monthIncome: summary.income,
+    ),
+    balances: balances,
+    month: summary,
     previous: await finance.summary(previousPeriod),
     previousPeriod: previousPeriod,
     partial: month.contains(now),

@@ -2,11 +2,14 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:finbro_app/core/database/app_database.dart';
 import 'package:finbro_app/core/database/seed.dart';
 import 'package:finbro_app/core/ledger/ledger_service.dart';
+import 'package:finbro_app/core/notifications/notification_service.dart';
 import 'package:finbro_app/core/settings/app_settings_repository.dart';
 import 'package:finbro_app/features/calendar/domain/daily_check_service.dart';
 import 'package:finbro_app/features/recurring/data/recurring_repository.dart';
 import 'package:finbro_app/features/recurring/domain/recurring_engine.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import '../support/fake_notifications.dart';
 
 void main() {
   late AppDatabase db;
@@ -272,5 +275,22 @@ void main() {
     );
     expect(reminderAt(rule.single, DateTime(2026, 10, 25)), DateTime(2026, 10, 24, 8, 30));
     expect(reminderBody(rule.single, 5000000, 'BCA'), 'Salary Rp 5.000.000 dijadwalkan besok ke BCA');
+  });
+
+  test('sync reschedules a reminder only when its time or text changes', () async {
+    final notifications = FakeNotifications();
+    engine = RecurringEngine(db, ledger, clock: () => now, notifications: notifications);
+    repo = RecurringRepository(db, engine, clock: () => now);
+    await repo.create(salary());
+    final upcoming = (await instances()).last;
+    expect(notifications.pending.keys, [NotificationIds.recurring(upcoming.id)]);
+
+    notifications.resetCalls();
+    await engine.sync(now);
+    expect(notifications.pluginCalls, 0);
+
+    final id = (await db.select(db.recurringRules).getSingle()).id;
+    await repo.update(id, salary(amount: 6000000));
+    expect(notifications.scheduled, [NotificationIds.recurring(upcoming.id)]);
   });
 }

@@ -250,11 +250,25 @@ class FinanceService {
 
   /// Monthly income/expense for the [months] months ending with [now]'s month.
   Future<List<MonthPoint>> monthlyTrend(DateTime now, {int months = 6}) async {
+    final first = DateTime(now.year, now.month - (months - 1));
+    final rows = await db.customSelect(
+      '''
+      SELECT substr(transaction_at, 1, 7) AS month,
+        COALESCE(SUM(CASE WHEN type = 'income' THEN amount END), 0) AS income,
+        COALESCE(SUM(CASE WHEN type = 'expense' THEN amount END), 0) AS expense
+      FROM transactions
+      WHERE $_confirmed AND transaction_at >= ? AND transaction_at < ?
+      GROUP BY month
+      ''',
+      variables: [Variable(sqlDateTime(first)), Variable(sqlDateTime(nextMonthStart(now)))],
+      readsFrom: {db.transactions},
+    ).get();
+    final byMonth = {for (final r in rows) r.read<String>('month'): r};
     final out = <MonthPoint>[];
-    for (var i = months - 1; i >= 0; i--) {
-      final m = DateTime(now.year, now.month - i);
-      final s = await summary(Period.month(m));
-      out.add(MonthPoint(m, s.income, s.expense));
+    for (var i = 0; i < months; i++) {
+      final m = DateTime(first.year, first.month + i);
+      final r = byMonth[sqlDate(m).substring(0, 7)];
+      out.add(MonthPoint(m, r?.read<int>('income') ?? 0, r?.read<int>('expense') ?? 0));
     }
     return out;
   }
@@ -381,20 +395,25 @@ class FinanceService {
     [sqlDate(monthEnd(now))],
   );
 
-  /// §4 with approved reserve rule #10.
-  Future<AvailableToSpend> availableToSpendBreakdown(DateTime now) async {
+  /// §4 with approved reserve rule #10. [totalBalance] and [monthIncome] may
+  /// be passed when the caller already computed them for the same moment.
+  Future<AvailableToSpend> availableToSpendBreakdown(
+    DateTime now, {
+    int? totalBalance,
+    int? monthIncome,
+  }) async {
     final settings = await planningSettings();
     final month = Period.month(now);
     final goalReserve = await _scalar(
       'SELECT COALESCE(SUM(MAX(current_amount, 0)), 0) FROM goals WHERE is_active = 1',
       const [],
     );
-    final income = (await summary(month)).income;
+    final income = monthIncome ?? (await summary(month)).income;
     final familySpent = await familySupportExpense(month);
     final familyPlanned = income * settings.familyPercent ~/ 100;
     final familyReserve = familyPlanned > familySpent ? familyPlanned - familySpent : 0;
     return AvailableToSpend(
-      totalBalance: await totalBalance(),
+      totalBalance: totalBalance ?? await this.totalBalance(),
       goalReserve: goalReserve,
       familyReserve: familyReserve,
       userReserve: settings.userReserve,
@@ -420,48 +439,45 @@ class FinanceService {
 
   /// FR-BUD-002 budgets overlapping the month of [month] with actuals.
   Future<List<BudgetUsageItem>> budgetUsages(DateTime month) async {
-    final start = sqlDate(monthStart(month));
-    final end = sqlDate(monthEnd(month));
-    final rows = await (db.select(db.budgets).join([
+    final rows = await db.customSelect(
+      '''
+      SELECT b.id AS id, ${_budgetActualSql('b.category_id', 'b.period_start', 'b.period_end')} AS actual
+      FROM budgets b
+      WHERE b.is_active = 1 AND b.period_start <= ? AND b.period_end >= ?
+      ''',
+      variables: [Variable(sqlDate(monthEnd(month))), Variable(sqlDate(monthStart(month)))],
+      readsFrom: {db.budgets, db.transactions},
+    ).get();
+    if (rows.isEmpty) return const [];
+    final actuals = {for (final r in rows) r.read<String>('id'): r.read<int>('actual')};
+    final joined = await (db.select(db.budgets).join([
       innerJoin(db.categories, db.categories.id.equalsExp(db.budgets.categoryId)),
-    ])..where(
-            db.budgets.isActive.equals(true) &
-                db.budgets.periodStart.isSmallerOrEqualValue(end) &
-                db.budgets.periodEnd.isBiggerOrEqualValue(start),
-          ))
+    ])..where(db.budgets.id.isIn(actuals.keys)))
         .get();
-    final out = <BudgetUsageItem>[];
-    for (final r in rows) {
-      final b = r.readTable(db.budgets);
-      out.add(
+    final out = [
+      for (final r in joined)
         BudgetUsageItem(
-          budget: b,
+          budget: r.readTable(db.budgets),
           category: r.readTable(db.categories),
-          actual: await budgetActual(b),
+          actual: actuals[r.readTable(db.budgets).id]!,
         ),
-      );
-    }
+    ];
     out.sort((a, b) => b.usage.compareTo(a.usage));
     return out;
   }
 
+  /// Confirmed expense of a category from [start] through the whole [end]
+  /// day (date-only columns/params; SQLite `date()` is calendar-correct).
+  static String _budgetActualSql(String category, String start, String end) => '''
+    COALESCE((SELECT SUM(t.amount) FROM transactions t
+      WHERE t.type = 'expense' AND t.$_confirmed AND t.category_id = $category
+        AND t.transaction_at >= $start AND t.transaction_at < date($end, '+1 day')), 0)''';
+
   /// Actual expense for a budget's category within its inclusive date range.
-  Future<int> budgetActual(Budget b) {
-    final e = b.periodEnd;
-    return _scalar(
-      '''
-      SELECT COALESCE(SUM(amount), 0) FROM transactions
-      WHERE type = 'expense' AND $_confirmed AND category_id = ?
-        AND transaction_at >= ? AND transaction_at < ?
-      ''',
-      [
-        b.categoryId,
-        sqlDateTime(b.periodStart),
-        // Calendar day after the end date (a 24 h Duration is wrong across DST).
-        sqlDateTime(DateTime(e.year, e.month, e.day + 1)),
-      ],
-    );
-  }
+  Future<int> budgetActual(Budget b) => _scalar(
+    'SELECT ${_budgetActualSql('?1', '?2', '?3')}',
+    [b.categoryId, sqlDate(b.periodStart), sqlDate(b.periodEnd)],
+  );
 
   Future<FinancialMetrics> metrics(DateTime now, {Period? period}) async {
     final p = period ?? Period.month(now);

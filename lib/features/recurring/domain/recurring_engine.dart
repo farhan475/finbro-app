@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import 'package:flutter/material.dart' show TimeOfDay;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -376,8 +378,11 @@ class RecurringEngine {
         .write(RecurringInstancesCompanion(status: const Value(RecurringStatus.scheduled), updatedAt: Value(now)));
   }
 
+  /// Runs on every sync (app start/resume), so it diffs against the pending
+  /// requests and only (re)schedules reminders whose time or text changed:
+  /// each plugin call rewrites the plugin's whole stored schedule.
   Future<void> _syncReminders(DateTime today) async {
-    final pending = (await _notifications.pendingPayloads()).keys.toSet();
+    final pending = await _notifications.pendingPayloads();
     final q = db.select(db.recurringInstances).join([
       innerJoin(db.recurringRules, db.recurringRules.id.equalsExp(db.recurringInstances.recurringRuleId)),
     ])..where(db.recurringInstances.dueDate.isBiggerOrEqualValue(sqlDate(today)));
@@ -392,18 +397,23 @@ class RecurringEngine {
       final id = NotificationIds.recurring(inst.id);
       if (!inst.status.isOpen || !rule.active || !rule.reminderEnabled) continue;
       wanted.add(id);
-      await _notifications.schedule(
-        id: id,
-        at: reminderAt(rule, inst.dueDate),
-        title: rule.type == TransactionType.income ? 'Income terjadwal' : 'Expense terjadwal',
-        body: reminderBody(rule, inst.amount, accounts[rule.accountId] ?? '-'),
-        payload: {'kind': NotificationKind.recurring, 'instanceId': inst.id},
-      );
+      final at = reminderAt(rule, inst.dueDate);
+      final title = rule.type == TransactionType.income ? 'Income terjadwal' : 'Expense terjadwal';
+      final body = reminderBody(rule, inst.amount, accounts[rule.accountId] ?? '-');
+      // `at`/`text` only make the payload change whenever the reminder does.
+      final payload = {
+        'kind': NotificationKind.recurring,
+        'instanceId': inst.id,
+        'at': sqlDateTime(at),
+        'text': '$title|$body',
+      };
+      if (pending[id] == jsonEncode(payload)) continue;
+      await _notifications.schedule(id: id, at: at, title: title, body: body, payload: payload);
     }
     // Every other pending recurring reminder is obsolete: its instance was
     // closed, its rule changed, or the instance no longer exists (e.g. the
     // database was replaced by a restore).
-    for (final id in pending) {
+    for (final id in pending.keys) {
       if (NotificationIds.isRecurring(id) && !wanted.contains(id)) {
         await _notifications.cancel(id);
       }
