@@ -2050,6 +2050,17 @@ class $AttachmentsTable extends Attachments
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _fileSha256Meta = const VerificationMeta(
+    'fileSha256',
+  );
+  @override
+  late final GeneratedColumn<String> fileSha256 = GeneratedColumn<String>(
+    'file_sha256',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   late final GeneratedColumnWithTypeConverter<DateTime, String> createdAt =
       GeneratedColumn<String>(
@@ -2067,6 +2078,7 @@ class $AttachmentsTable extends Attachments
     mimeType,
     sourceKind,
     imageHash,
+    fileSha256,
     createdAt,
   ];
   @override
@@ -2119,6 +2131,12 @@ class $AttachmentsTable extends Attachments
         imageHash.isAcceptableOrUnknown(data['image_hash']!, _imageHashMeta),
       );
     }
+    if (data.containsKey('file_sha256')) {
+      context.handle(
+        _fileSha256Meta,
+        fileSha256.isAcceptableOrUnknown(data['file_sha256']!, _fileSha256Meta),
+      );
+    }
     return context;
   }
 
@@ -2154,6 +2172,10 @@ class $AttachmentsTable extends Attachments
         DriftSqlType.string,
         data['${effectivePrefix}image_hash'],
       ),
+      fileSha256: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}file_sha256'],
+      ),
       createdAt: $AttachmentsTable.$convertercreatedAt.fromSql(
         attachedDatabase.typeMapping.read(
           DriftSqlType.string,
@@ -2181,6 +2203,11 @@ class Attachment extends DataClass implements Insertable<Attachment> {
   final String mimeType;
   final AttachmentKind sourceKind;
   final String? imageHash;
+
+  /// SHA-256 (hex) of the stored file; null for rows created before schema 4
+  /// or files written without hashing. Verified by integrity check and used
+  /// to verify unpacked backup entries at restore.
+  final String? fileSha256;
   final DateTime createdAt;
   const Attachment({
     required this.id,
@@ -2189,6 +2216,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
     required this.mimeType,
     required this.sourceKind,
     this.imageHash,
+    this.fileSha256,
     required this.createdAt,
   });
   @override
@@ -2205,6 +2233,9 @@ class Attachment extends DataClass implements Insertable<Attachment> {
     }
     if (!nullToAbsent || imageHash != null) {
       map['image_hash'] = Variable<String>(imageHash);
+    }
+    if (!nullToAbsent || fileSha256 != null) {
+      map['file_sha256'] = Variable<String>(fileSha256);
     }
     {
       map['created_at'] = Variable<String>(
@@ -2224,6 +2255,9 @@ class Attachment extends DataClass implements Insertable<Attachment> {
       imageHash: imageHash == null && nullToAbsent
           ? const Value.absent()
           : Value(imageHash),
+      fileSha256: fileSha256 == null && nullToAbsent
+          ? const Value.absent()
+          : Value(fileSha256),
       createdAt: Value(createdAt),
     );
   }
@@ -2240,6 +2274,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
       mimeType: serializer.fromJson<String>(json['mimeType']),
       sourceKind: serializer.fromJson<AttachmentKind>(json['sourceKind']),
       imageHash: serializer.fromJson<String?>(json['imageHash']),
+      fileSha256: serializer.fromJson<String?>(json['fileSha256']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
     );
   }
@@ -2253,6 +2288,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
       'mimeType': serializer.toJson<String>(mimeType),
       'sourceKind': serializer.toJson<AttachmentKind>(sourceKind),
       'imageHash': serializer.toJson<String?>(imageHash),
+      'fileSha256': serializer.toJson<String?>(fileSha256),
       'createdAt': serializer.toJson<DateTime>(createdAt),
     };
   }
@@ -2264,6 +2300,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
     String? mimeType,
     AttachmentKind? sourceKind,
     Value<String?> imageHash = const Value.absent(),
+    Value<String?> fileSha256 = const Value.absent(),
     DateTime? createdAt,
   }) => Attachment(
     id: id ?? this.id,
@@ -2272,6 +2309,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
     mimeType: mimeType ?? this.mimeType,
     sourceKind: sourceKind ?? this.sourceKind,
     imageHash: imageHash.present ? imageHash.value : this.imageHash,
+    fileSha256: fileSha256.present ? fileSha256.value : this.fileSha256,
     createdAt: createdAt ?? this.createdAt,
   );
   Attachment copyWithCompanion(AttachmentsCompanion data) {
@@ -2286,6 +2324,9 @@ class Attachment extends DataClass implements Insertable<Attachment> {
           ? data.sourceKind.value
           : this.sourceKind,
       imageHash: data.imageHash.present ? data.imageHash.value : this.imageHash,
+      fileSha256: data.fileSha256.present
+          ? data.fileSha256.value
+          : this.fileSha256,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
     );
   }
@@ -2299,6 +2340,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
           ..write('mimeType: $mimeType, ')
           ..write('sourceKind: $sourceKind, ')
           ..write('imageHash: $imageHash, ')
+          ..write('fileSha256: $fileSha256, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
         .toString();
@@ -2312,6 +2354,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
     mimeType,
     sourceKind,
     imageHash,
+    fileSha256,
     createdAt,
   );
   @override
@@ -2324,6 +2367,7 @@ class Attachment extends DataClass implements Insertable<Attachment> {
           other.mimeType == this.mimeType &&
           other.sourceKind == this.sourceKind &&
           other.imageHash == this.imageHash &&
+          other.fileSha256 == this.fileSha256 &&
           other.createdAt == this.createdAt);
 }
 
@@ -2334,6 +2378,7 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
   final Value<String> mimeType;
   final Value<AttachmentKind> sourceKind;
   final Value<String?> imageHash;
+  final Value<String?> fileSha256;
   final Value<DateTime> createdAt;
   final Value<int> rowid;
   const AttachmentsCompanion({
@@ -2343,6 +2388,7 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
     this.mimeType = const Value.absent(),
     this.sourceKind = const Value.absent(),
     this.imageHash = const Value.absent(),
+    this.fileSha256 = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -2353,6 +2399,7 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
     required String mimeType,
     required AttachmentKind sourceKind,
     this.imageHash = const Value.absent(),
+    this.fileSha256 = const Value.absent(),
     required DateTime createdAt,
     this.rowid = const Value.absent(),
   }) : id = Value(id),
@@ -2368,6 +2415,7 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
     Expression<String>? mimeType,
     Expression<String>? sourceKind,
     Expression<String>? imageHash,
+    Expression<String>? fileSha256,
     Expression<String>? createdAt,
     Expression<int>? rowid,
   }) {
@@ -2378,6 +2426,7 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
       if (mimeType != null) 'mime_type': mimeType,
       if (sourceKind != null) 'source_kind': sourceKind,
       if (imageHash != null) 'image_hash': imageHash,
+      if (fileSha256 != null) 'file_sha256': fileSha256,
       if (createdAt != null) 'created_at': createdAt,
       if (rowid != null) 'rowid': rowid,
     });
@@ -2390,6 +2439,7 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
     Value<String>? mimeType,
     Value<AttachmentKind>? sourceKind,
     Value<String?>? imageHash,
+    Value<String?>? fileSha256,
     Value<DateTime>? createdAt,
     Value<int>? rowid,
   }) {
@@ -2400,6 +2450,7 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
       mimeType: mimeType ?? this.mimeType,
       sourceKind: sourceKind ?? this.sourceKind,
       imageHash: imageHash ?? this.imageHash,
+      fileSha256: fileSha256 ?? this.fileSha256,
       createdAt: createdAt ?? this.createdAt,
       rowid: rowid ?? this.rowid,
     );
@@ -2428,6 +2479,9 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
     if (imageHash.present) {
       map['image_hash'] = Variable<String>(imageHash.value);
     }
+    if (fileSha256.present) {
+      map['file_sha256'] = Variable<String>(fileSha256.value);
+    }
     if (createdAt.present) {
       map['created_at'] = Variable<String>(
         $AttachmentsTable.$convertercreatedAt.toSql(createdAt.value),
@@ -2448,6 +2502,7 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
           ..write('mimeType: $mimeType, ')
           ..write('sourceKind: $sourceKind, ')
           ..write('imageHash: $imageHash, ')
+          ..write('fileSha256: $fileSha256, ')
           ..write('createdAt: $createdAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -10777,6 +10832,7 @@ typedef $$AttachmentsTableCreateCompanionBuilder =
       required String mimeType,
       required AttachmentKind sourceKind,
       Value<String?> imageHash,
+      Value<String?> fileSha256,
       required DateTime createdAt,
       Value<int> rowid,
     });
@@ -10788,6 +10844,7 @@ typedef $$AttachmentsTableUpdateCompanionBuilder =
       Value<String> mimeType,
       Value<AttachmentKind> sourceKind,
       Value<String?> imageHash,
+      Value<String?> fileSha256,
       Value<DateTime> createdAt,
       Value<int> rowid,
     });
@@ -10847,6 +10904,11 @@ class $$AttachmentsTableFilterComposer
 
   ColumnFilters<String> get imageHash => $composableBuilder(
     column: $table.imageHash,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get fileSha256 => $composableBuilder(
+    column: $table.fileSha256,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -10914,6 +10976,11 @@ class $$AttachmentsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get fileSha256 => $composableBuilder(
+    column: $table.fileSha256,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get createdAt => $composableBuilder(
     column: $table.createdAt,
     builder: (column) => ColumnOrderings(column),
@@ -10969,6 +11036,11 @@ class $$AttachmentsTableAnnotationComposer
 
   GeneratedColumn<String> get imageHash =>
       $composableBuilder(column: $table.imageHash, builder: (column) => column);
+
+  GeneratedColumn<String> get fileSha256 => $composableBuilder(
+    column: $table.fileSha256,
+    builder: (column) => column,
+  );
 
   GeneratedColumnWithTypeConverter<DateTime, String> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
@@ -11031,6 +11103,7 @@ class $$AttachmentsTableTableManager
                 Value<String> mimeType = const Value.absent(),
                 Value<AttachmentKind> sourceKind = const Value.absent(),
                 Value<String?> imageHash = const Value.absent(),
+                Value<String?> fileSha256 = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => AttachmentsCompanion(
@@ -11040,6 +11113,7 @@ class $$AttachmentsTableTableManager
                 mimeType: mimeType,
                 sourceKind: sourceKind,
                 imageHash: imageHash,
+                fileSha256: fileSha256,
                 createdAt: createdAt,
                 rowid: rowid,
               ),
@@ -11051,6 +11125,7 @@ class $$AttachmentsTableTableManager
                 required String mimeType,
                 required AttachmentKind sourceKind,
                 Value<String?> imageHash = const Value.absent(),
+                Value<String?> fileSha256 = const Value.absent(),
                 required DateTime createdAt,
                 Value<int> rowid = const Value.absent(),
               }) => AttachmentsCompanion.insert(
@@ -11060,6 +11135,7 @@ class $$AttachmentsTableTableManager
                 mimeType: mimeType,
                 sourceKind: sourceKind,
                 imageHash: imageHash,
+                fileSha256: fileSha256,
                 createdAt: createdAt,
                 rowid: rowid,
               ),

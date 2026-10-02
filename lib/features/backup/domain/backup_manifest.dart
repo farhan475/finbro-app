@@ -19,6 +19,7 @@ class BackupManifest {
     required this.attachments,
     required this.sha256,
     this.attachmentFiles = const {},
+    this.attachmentChecksums = const {},
     this.app = appId,
     this.format = currentFormat,
   });
@@ -46,6 +47,10 @@ class BackupManifest {
   /// attachments.id → zip entry (`attachments/<name>`), relative names only.
   final Map<String, String> attachmentFiles;
 
+  /// Zip entry → SHA-256 (hex) of the unpacked file. Empty for backups made
+  /// before attachment checksums existed (format 1 stays compatible).
+  final Map<String, String> attachmentChecksums;
+
   Map<String, Object?> toJson() => {
     'app': app,
     'format': format,
@@ -58,6 +63,7 @@ class BackupManifest {
     },
     'sha256': sha256,
     'attachmentFiles': attachmentFiles,
+    if (attachmentChecksums.isNotEmpty) 'attachmentChecksums': attachmentChecksums,
   };
 
   /// Throws [FormatException] when a required field is missing or mistyped.
@@ -73,6 +79,12 @@ class BackupManifest {
     if (files != null && files is! Map<String, dynamic>) {
       throw const FormatException('manifest field "attachmentFiles" invalid');
     }
+    final checksums = json['attachmentChecksums'];
+    if (checksums != null && checksums is! Map<String, dynamic>) {
+      throw const FormatException('manifest field "attachmentChecksums" invalid');
+    }
+    String stringMapEntry(MapEntry<String, dynamic> e, String field) =>
+        e.value is String ? e.value as String : throw FormatException('manifest $field entry invalid');
     return BackupManifest(
       app: field<String>(json, 'app'),
       format: field<int>(json, 'format'),
@@ -84,9 +96,11 @@ class BackupManifest {
       sha256: field<String>(json, 'sha256'),
       attachmentFiles: {
         for (final e in ((files as Map<String, dynamic>?) ?? const {}).entries)
-          e.key: e.value is String
-              ? e.value as String
-              : throw const FormatException('manifest attachment entry invalid'),
+          e.key: stringMapEntry(e, 'attachmentFiles'),
+      },
+      attachmentChecksums: {
+        for (final e in ((checksums as Map<String, dynamic>?) ?? const {}).entries)
+          e.key: stringMapEntry(e, 'attachmentChecksums'),
       },
     );
   }

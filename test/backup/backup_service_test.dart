@@ -317,6 +317,63 @@ void main() {
     expect(IntegrityReport.tryParse(jsonEncode(report.toJson()))!.summary, report.summary);
   });
 
+  test('a tampered attachment entry fails validation via its manifest checksum', () async {
+    await seedData();
+    final created = await service.createBackup(now);
+    final src = ZipDecoder().decodeBytes(created.package.bytes);
+
+    // Rebuild the zip with different attachment bytes (valid zip: CRC fixed
+    // by the encoder), so only the manifest SHA-256 can catch the change.
+    final out = Archive();
+    for (final f in src) {
+      out.add(
+        f.name == 'attachments/r1.jpg'
+            ? ArchiveFile.bytes(f.name, utf8.encode('tampered-bytes'))
+            : ArchiveFile.bytes(f.name, f.readBytes()!),
+      );
+    }
+    final zip = ZipEncoder().encodeBytes(out);
+
+    expect(
+      () => BackupService.validate(zip),
+      throwsA(
+        isA<BackupException>().having(
+          (e) => e.message, 'message', contains('Checksum lampiran r1.jpg tidak cocok'),
+        ),
+      ),
+    );
+  });
+
+  test('restore writes the manifest checksum into attachments and integrity check verifies it', () async {
+    await seedData();
+    final created = await service.createBackup(now);
+    final validated = BackupService.validate(created.package.bytes);
+
+    final dbFile = File(p.join(tmp.path, 'live', 'finbro.sqlite'));
+    await service.restore(
+      validated,
+      now: now.add(const Duration(minutes: 1)),
+      replaceDatabase: (replace) => replace(dbFile),
+    );
+    final restored = AppDatabase(NativeDatabase(dbFile));
+    addTearDown(restored.close);
+
+    final att = await restored.select(restored.attachments).getSingle();
+    expect(att.fileSha256, isNotNull);
+    expect(att.fileSha256, sha256.convert(await File(att.localPath).readAsBytes()).toString());
+
+    // Unmodified: report OK and the checksum is not flagged.
+    final report = await runIntegrityCheck(restored, attachments, now: now, trigger: 'restore');
+    expect(report.checksumMismatches, isEmpty);
+    expect(report.ok, isTrue, reason: report.summary.join('; '));
+
+    // Tamper the restored file on disk: the next integrity check flags it.
+    await File(att.localPath).writeAsString('edited-after-restore');
+    final after = await runIntegrityCheck(restored, attachments, now: now, trigger: 'manual');
+    expect(after.checksumMismatches.map(p.basename), ['r1.jpg']);
+    expect(after.ok, isFalse);
+  });
+
   test('CSV export quotes free text and neutralises formulas', () async {
     await seedData();
     await ledger.create(TransactionDraft(

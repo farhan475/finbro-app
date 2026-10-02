@@ -381,6 +381,12 @@ class BackupService {
       if (bytes == null) {
         throw BackupException('Lampiran $entry hilang dari backup. File backup tidak lengkap.');
       }
+      final expected = manifest.attachmentChecksums[entry]?.toLowerCase();
+      if (expected != null && crypto.sha256.convert(bytes).toString() != expected) {
+        throw BackupException(
+          'Checksum lampiran ${p.basename(entry)} tidak cocok. File backup rusak atau telah diubah.',
+        );
+      }
       files[entry] = bytes;
     }
     return ValidatedBackup(manifest: manifest, sqlite: sqlite, files: files);
@@ -440,8 +446,14 @@ class BackupService {
             final path = pathForEntry[e.value];
             if (path == null) continue;
             restoredIds.add(e.key);
-            await (stagedDb.update(stagedDb.attachments)..where((a) => a.id.equals(e.key)))
-                .write(AttachmentsCompanion(localPath: Value(path)));
+            await (stagedDb.update(stagedDb.attachments)..where((a) => a.id.equals(e.key))).write(
+              AttachmentsCompanion(
+                localPath: Value(path),
+                // The checksum of the packaged file; integrity check later
+                // compares it against the restored file on disk.
+                fileSha256: Value(backup.manifest.attachmentChecksums[e.value]),
+              ),
+            );
           }
           // The backup DB is untrusted: a row whose file did not come from the
           // zip could point anywhere (later deleted or re-backed-up). Point it
@@ -552,6 +564,12 @@ class BackupService {
           count(File(path).lengthSync());
         }
         final sqlite = File(sqlitePath).readAsBytesSync();
+        // SHA-256 per attachment entry: restore and integrity check verify
+        // these against the unpacked bytes (CRC32 in the zip header is
+        // non-cryptographic and only covers corruption after packaging).
+        final attachmentChecksums = <String, String>{
+          for (final e in entryPaths.entries) e.key: crypto.sha256.convert(File(e.value).readAsBytesSync()).toString(),
+        };
         final manifest = BackupManifest(
           schemaVersion: AppDatabase.currentSchemaVersion,
           createdAt: createdAt,
@@ -560,6 +578,7 @@ class BackupService {
           attachments: attachments,
           sha256: crypto.sha256.convert(sqlite).toString(),
           attachmentFiles: attachmentFiles,
+          attachmentChecksums: attachmentChecksums,
         );
         final manifestBytes = utf8.encode(const JsonEncoder.withIndent('  ').convert(manifest.toJson()));
         count(manifestBytes.length);

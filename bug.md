@@ -4,7 +4,6 @@ Status setelah penyelesaian pekerjaan codebase: lihat item aktif di bawah. `flut
 
 ## Masih terbuka
 
-- Lampiran belum punya checksum di manifest backup (DB dilindungi SHA-256; CRC32 per entry zip sudah diverifikasi saat restore sejak 2 Okt 2026).
 - Backup dan restore memuat seluruh zip ke memori, sehingga batasnya 512 MB (zip), 256 MB per file, 1 GB total. Backup di atas batas ditolak saat dibuat. Untuk pengguna dengan sangat banyak lampiran perlu backup streaming (lihat roadmap).
 
 ## Belum divalidasi di perangkat

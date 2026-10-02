@@ -3,11 +3,11 @@
 Date: 2 Oktober 2026 · Version 1.0.0+1 · `id.finbro.app`
 
 **Status:** tidak ada target rilis; app dijaga tetap siap rilis. Validasi perangkat setelah perubahan 2 Okt dan UI release terbaru belum tuntas; lihat daftar pemeriksaan dan hasil sesi di bawah.
-Sesi 2 Okt 2026 (terbaru): fitur impor mutasi bank CSV selesai end-to-end (parser, UI tinjau, duplikat, commit, route `/import`, 6 test) — tidak perlu dikerjakan ulang; lihat Roadmap untuk sisa PDF.
+Sesi 2 Okt 2026 (terbaru): fitur impor mutasi bank CSV selesai end-to-end (parser, UI tinjau, duplikat, commit, route `/import`, 6 test) — tidak perlu dikerjakan ulang; lihat Roadmap untuk sisa PDF. Checksum lampiran backup juga selesai: SHA-256 per lampiran di manifest + verifikasi restore + `file_sha256` (skema v4) di integrity check — item "Masih terbuka" tinggal backup streaming.
 
 ## Verified
 
-- `flutter analyze`: no issues. Full test suite passed: 253 tests (2 Okt 2026, termasuk 6 test fitur impor CSV).
+- `flutter analyze`: no issues. Full test suite passed: 256 tests (2 Okt 2026, termasuk 6 test impor CSV + 2 test checksum lampiran; skema v4 tersisternisasi).
 - Diverifikasi di perangkat 1 Okt (sebelum perubahan 2 Okt), release build di Xiaomi 14T (Android 16 / HyperOS):
   - Onboarding, income/expense/transfer, edit/delete, transfer, budget alert 85%, konfirmasi gaji recurring.
   - Notifikasi: budget alert, reminder gaji, daily check (juga layar mati), "Nanti" +1 jam, "Tidak ada" dari background isolate; alarm dipulihkan setelah reboot.

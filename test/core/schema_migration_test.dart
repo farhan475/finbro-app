@@ -99,7 +99,7 @@ void main() {
     await db.close();
   });
 
-  test('v2 → v3 keeps goals and movements and adds an empty, unique account link', () async {
+  test('v2 → current keeps goals and movements and adds an empty, unique account link', () async {
     final schema = await verifier.schemaAt(2);
     const ts = '2026-09-01T10:00:00';
     schema.rawDatabase
@@ -119,7 +119,7 @@ void main() {
       );
 
     final db = AppDatabase(schema.newConnection());
-    await verifier.migrateAndValidate(db, 3);
+    await verifier.migrateAndValidate(db, AppDatabase.currentSchemaVersion);
 
     final goals = await (db.select(db.goals)..orderBy([(g) => OrderingTerm.asc(g.id)])).get();
     expect(

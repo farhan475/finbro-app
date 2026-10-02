@@ -111,6 +111,11 @@ class Attachments extends Table {
   TextColumn get sourceKind =>
       text().map(const DbEnumConverter(AttachmentKind.values))();
   TextColumn get imageHash => text().nullable()();
+
+  /// SHA-256 (hex) of the stored file; null for rows created before schema 4
+  /// or files written without hashing. Verified by integrity check and used
+  /// to verify unpacked backup entries at restore.
+  TextColumn get fileSha256 => text().nullable()();
   TextColumn get createdAt => text().map(const LocalDateTimeConverter())();
 
   @override

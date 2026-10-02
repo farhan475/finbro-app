@@ -56,12 +56,16 @@ class AttachmentDraft {
     required this.mimeType,
     required this.kind,
     this.imageHash,
+    this.fileSha256,
   });
 
   final String localPath;
   final String mimeType;
   final AttachmentKind kind;
   final String? imageHash;
+
+  /// SHA-256 of the file at [localPath] (see `AttachmentStorage.import`).
+  final String? fileSha256;
 }
 
 class LedgerValidationException implements Exception {
@@ -276,6 +280,7 @@ class LedgerService {
           mimeType: a.mimeType,
           sourceKind: a.kind,
           imageHash: Value(a.imageHash),
+          fileSha256: Value(a.fileSha256),
           createdAt: now,
         ),
       );

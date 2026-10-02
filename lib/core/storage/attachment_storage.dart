@@ -29,18 +29,22 @@ abstract final class AttachmentStorage {
       isWithin((await directory()).path, path);
 
   /// Copies [source] into private storage and returns a ready-to-link draft
-  /// including the SHA-256 hash used for duplicate detection. Pass
-  /// [imageHash] when the caller already hashed [source] to skip re-hashing.
+  /// including the SHA-256 hash used for duplicate detection ([imageHash])
+  /// and the file checksum stored for integrity verification ([fileSha256]).
+  /// Pass [imageHash] when the caller already hashed [source] to skip
+  /// re-hashing.
   static Future<AttachmentDraft> import(File source, AttachmentKind kind, {String? imageHash}) async {
     final ext = p.extension(source.path).toLowerCase();
     final dir = await directory();
     final target = File(p.join(dir.path, '${newId()}${ext.isEmpty ? '.jpg' : ext}'));
     await source.copy(target.path);
+    final hash = await hashFile(target);
     return AttachmentDraft(
       localPath: target.path,
       mimeType: _mime(ext),
       kind: kind,
-      imageHash: imageHash ?? await hashFile(target),
+      imageHash: imageHash ?? hash,
+      fileSha256: hash,
     );
   }
 

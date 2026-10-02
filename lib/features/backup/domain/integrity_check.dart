@@ -21,6 +21,7 @@ class IntegrityReport {
     this.databaseProblems = const [],
     this.missingFiles = const [],
     this.orphanFiles = const [],
+    this.checksumMismatches = const [],
   });
 
   final DateTime checkedAt;
@@ -35,13 +36,22 @@ class IntegrityReport {
   /// Files in the attachment directory not referenced by any row.
   final List<String> orphanFiles;
 
-  bool get ok => databaseProblems.isEmpty && missingFiles.isEmpty && orphanFiles.isEmpty;
+  /// Files whose SHA-256 no longer matches the stored `fileSha256`.
+  final List<String> checksumMismatches;
+
+  bool get ok =>
+      databaseProblems.isEmpty &&
+      missingFiles.isEmpty &&
+      orphanFiles.isEmpty &&
+      checksumMismatches.isEmpty;
 
   /// Human-readable lines for banners and the log screen.
   List<String> get summary => [
     ...databaseProblems,
     if (missingFiles.isNotEmpty) '${missingFiles.length} lampiran hilang (file tidak ditemukan)',
     if (orphanFiles.isNotEmpty) '${orphanFiles.length} file lampiran tanpa transaksi',
+    if (checksumMismatches.isNotEmpty)
+      '${checksumMismatches.length} lampiran berubah (checksum tidak cocok)',
   ];
 
   Map<String, Object?> toJson() => {
@@ -50,6 +60,7 @@ class IntegrityReport {
     'databaseProblems': databaseProblems,
     'missingFiles': missingFiles,
     'orphanFiles': orphanFiles,
+    if (checksumMismatches.isNotEmpty) 'checksumMismatches': checksumMismatches,
   };
 
   static IntegrityReport? tryParse(String? raw) {
@@ -63,6 +74,7 @@ class IntegrityReport {
         databaseProblems: list('databaseProblems'),
         missingFiles: list('missingFiles'),
         orphanFiles: list('orphanFiles'),
+        checksumMismatches: list('checksumMismatches'),
       );
     } catch (_) {
       return null;
@@ -81,10 +93,19 @@ Future<IntegrityReport> runIntegrityCheck(
   final rows = await db.select(db.attachments).get();
   final referenced = <String>{};
   final missing = <String>[];
+  final mismatched = <String>[];
   for (final r in rows) {
     final path = p.normalize(r.localPath);
     referenced.add(path);
-    if (!await File(path).exists()) missing.add(r.localPath);
+    final f = File(path);
+    if (!await f.exists()) {
+      missing.add(r.localPath);
+      continue;
+    }
+    if (r.fileSha256 != null) {
+      final actual = await AttachmentStorage.hashFile(f);
+      if (actual != r.fileSha256!.toLowerCase()) mismatched.add(r.localPath);
+    }
   }
   final orphans = <String>[];
   if (await attachmentsDir.exists()) {
@@ -98,6 +119,7 @@ Future<IntegrityReport> runIntegrityCheck(
     databaseProblems: dbProblems,
     missingFiles: missing,
     orphanFiles: orphans,
+    checksumMismatches: mismatched,
   );
   if (report.ok) {
     AppLogger.info('Integrity check ($trigger): OK');
