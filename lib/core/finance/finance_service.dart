@@ -110,6 +110,24 @@ class EmergencyStatus {
   int get targetAmount => (avgEssentialMonthly * targetMonths).round();
 }
 
+/// Saved amount of one goal (owner rule, schema v3). A goal linked to a
+/// Savings account follows that account's calculated balance (§2: confirmed
+/// rows dated up to now, opening balance included); an unlinked goal follows
+/// its movements (`goals.current_amount`). Read every goal figure from here.
+class GoalProgress {
+  const GoalProgress({required this.goal, required this.saved, this.linkedAccount});
+  final Goal goal;
+  final int saved;
+
+  /// Linked account (active or archived); null for a movements-based goal.
+  final Account? linkedAccount;
+
+  bool get isLinked => linkedAccount != null;
+  double get percent => goalProgress(saved, goal.targetAmount);
+  bool get reached => saved >= goal.targetAmount;
+  int get remaining => reached ? 0 : goal.targetAmount - saved;
+}
+
 /// Metric panel (§20): value + source rule, no opaque score.
 class FinancialMetrics {
   const FinancialMetrics({
@@ -159,24 +177,31 @@ class FinanceService {
     return (row.data.values.first as int?) ?? 0;
   }
 
-  /// §2 Calculated Balance per account (replayed from transactions). Rows
-  /// dated after now (scheduled ahead) do not count until their date.
+  /// §2 Calculated Balance of account [acc] whose opening balance is
+  /// [opening], as of the `?1` variable. Rows dated after it (scheduled
+  /// ahead) do not count until their date.
+  static String _balanceSql(String acc, String opening) => '''
+    $opening
+    + COALESCE((SELECT SUM(CASE t.type WHEN 'income' THEN t.amount ELSE -t.amount END)
+        FROM transactions t WHERE t.account_id = $acc AND t.$_confirmed
+          AND t.transaction_at <= ?1), 0)
+    + COALESCE((SELECT SUM(t.amount) FROM transactions t
+        WHERE t.transfer_to_account_id = $acc AND t.type = 'transfer' AND t.$_confirmed
+          AND t.transaction_at <= ?1), 0)''';
+
+  /// Goals `g` with their linked account `la` (null when unlinked).
+  static const _goalsJoin = 'goals g LEFT JOIN accounts la ON la.id = g.linked_account_id';
+
+  /// The one goal progress rule ([GoalProgress]) over [_goalsJoin], as of `?1`.
+  static final _goalSavedSql =
+      'CASE WHEN la.id IS NULL THEN g.current_amount '
+      "ELSE ${_balanceSql('la.id', 'la.opening_balance')} END";
+
+  /// §2 Calculated Balance per account (replayed from transactions).
   Future<List<AccountBalance>> accountBalances({bool includeArchived = false}) async {
-    final asOf = Variable(sqlDateTime(_clock()));
     final rows = await db.customSelect(
-      '''
-      SELECT a.id AS id,
-        a.opening_balance
-        + COALESCE((SELECT SUM(CASE t.type WHEN 'income' THEN t.amount ELSE -t.amount END)
-            FROM transactions t WHERE t.account_id = a.id AND t.$_confirmed
-              AND t.transaction_at <= ?1), 0)
-        + COALESCE((SELECT SUM(t.amount) FROM transactions t
-            WHERE t.transfer_to_account_id = a.id AND t.type = 'transfer' AND t.$_confirmed
-              AND t.transaction_at <= ?1), 0)
-        AS balance
-      FROM accounts a
-      ''',
-      variables: [asOf],
+      'SELECT a.id AS id, ${_balanceSql('a.id', 'a.opening_balance')} AS balance FROM accounts a',
+      variables: [Variable(sqlDateTime(_clock()))],
       readsFrom: {db.accounts, db.transactions},
     ).get();
     final balances = {for (final r in rows) r.read<String>('id'): r.read<int>('balance')};
@@ -185,6 +210,39 @@ class FinanceService {
     if (!includeArchived) q.where((a) => a.isActive.equals(true));
     final accounts = await q.get();
     return [for (final a in accounts) AccountBalance(a, balances[a.id] ?? a.openingBalance)];
+  }
+
+  /// Goals with their progress ([GoalProgress]), priority DESC then oldest
+  /// first. [goalId] selects one goal; [activeOnly] skips archived goals.
+  Future<List<GoalProgress>> goalProgresses({String? goalId, bool activeOnly = false, int? limit}) async {
+    final q = db.select(db.goals)
+      ..orderBy([(g) => OrderingTerm.desc(g.priority), (g) => OrderingTerm.asc(g.createdAt)]);
+    if (goalId != null) q.where((g) => g.id.equals(goalId));
+    if (activeOnly) q.where((g) => g.isActive.equals(true));
+    if (limit != null) q.limit(limit);
+    final goals = await q.get();
+    if (goals.isEmpty) return const [];
+    final rows = await db.customSelect(
+      'SELECT g.id AS id, $_goalSavedSql AS saved FROM $_goalsJoin',
+      variables: [Variable(sqlDateTime(_clock()))],
+      readsFrom: {db.goals, db.accounts, db.transactions},
+    ).get();
+    final saved = {for (final r in rows) r.read<String>('id'): r.read<int>('saved')};
+    final linkedIds = {for (final g in goals) ?g.linkedAccountId};
+    final accounts = linkedIds.isEmpty
+        ? const <String, Account>{}
+        : {
+            for (final a in await (db.select(db.accounts)..where((a) => a.id.isIn(linkedIds))).get())
+              a.id: a,
+          };
+    return [
+      for (final g in goals)
+        GoalProgress(
+          goal: g,
+          saved: saved[g.id] ?? g.currentAmount,
+          linkedAccount: accounts[g.linkedAccountId],
+        ),
+    ];
   }
 
   /// §3 Total Balance (active accounts only).
@@ -315,19 +373,34 @@ class FinanceService {
       _expenseWhere(p, "c.planning_bucket = 'family'");
 
   /// §11 development-bucket expense + net contributions to development goals
-  /// (manual adjustments are corrections, not allocations).
+  /// (manual adjustments are corrections, not allocations). A goal linked to
+  /// a Savings account contributes the net transfers into that account; its
+  /// movements do not count while linked (same rule as [GoalProgress]).
   Future<int> developmentAllocation(Period p) async {
+    final range = [sqlDateTime(p.start), sqlDateTime(p.end)];
     final spent = await _expenseWhere(p, "c.planning_bucket = 'development'");
     final contributed = await _scalar(
       '''
       SELECT COALESCE(SUM(m.amount), 0) FROM goal_movements m
       JOIN goals g ON g.id = m.goal_id
-      WHERE g.type = 'development' AND m.movement_type <> 'adjustment'
+      WHERE g.type = 'development' AND g.linked_account_id IS NULL
+        AND m.movement_type <> 'adjustment'
         AND m.movement_at >= ? AND m.movement_at < ?
       ''',
-      [sqlDateTime(p.start), sqlDateTime(p.end)],
+      range,
     );
-    return spent + contributed;
+    final transferred = await _scalar(
+      '''
+      SELECT COALESCE(SUM(CASE WHEN t.transfer_to_account_id = g.linked_account_id
+          THEN t.amount ELSE -t.amount END), 0)
+      FROM transactions t
+      JOIN goals g ON g.linked_account_id IN (t.account_id, t.transfer_to_account_id)
+      WHERE g.type = 'development' AND t.type = 'transfer' AND t.$_confirmed
+        AND t.transaction_at >= ? AND t.transaction_at < ?
+      ''',
+      range,
+    );
+    return spent + contributed + transferred;
   }
 
   /// §14 average essential expense per completed month in the lookback
@@ -397,6 +470,9 @@ class FinanceService {
 
   /// §4 with approved reserve rule #10. [totalBalance] and [monthIncome] may
   /// be passed when the caller already computed them for the same moment.
+  /// Goal reserve = progress of active goals ([GoalProgress]); a goal linked
+  /// to an archived account reserves nothing because that balance is already
+  /// outside Total Balance.
   Future<AvailableToSpend> availableToSpendBreakdown(
     DateTime now, {
     int? totalBalance,
@@ -405,8 +481,9 @@ class FinanceService {
     final settings = await planningSettings();
     final month = Period.month(now);
     final goalReserve = await _scalar(
-      'SELECT COALESCE(SUM(MAX(current_amount, 0)), 0) FROM goals WHERE is_active = 1',
-      const [],
+      'SELECT COALESCE(SUM(MAX($_goalSavedSql, 0)), 0) FROM $_goalsJoin '
+      'WHERE g.is_active = 1 AND (la.id IS NULL OR la.is_active = 1)',
+      [sqlDateTime(now)],
     );
     final income = monthIncome ?? (await summary(month)).income;
     final familySpent = await familySupportExpense(month);
@@ -422,12 +499,14 @@ class FinanceService {
     );
   }
 
-  /// Emergency Fund Balance = sum of active emergency goals (rule #9).
+  /// Emergency Fund Balance = progress ([GoalProgress]) of active emergency
+  /// goals (rule #9).
   Future<EmergencyStatus> emergencyStatus(DateTime now) async {
     final settings = await planningSettings();
     final balance = await _scalar(
-      "SELECT COALESCE(SUM(current_amount), 0) FROM goals WHERE type = 'emergency' AND is_active = 1",
-      const [],
+      'SELECT COALESCE(SUM(MAX($_goalSavedSql, 0)), 0) FROM $_goalsJoin '
+      "WHERE g.type = 'emergency' AND g.is_active = 1",
+      [sqlDateTime(now)],
     );
     return EmergencyStatus(
       balance: balance,
@@ -481,9 +560,17 @@ class FinanceService {
 
   Future<FinancialMetrics> metrics(DateTime now, {Period? period}) async {
     final p = period ?? Period.month(now);
+    final summaryFuture = summary(p);
+    final totalBalanceFuture = totalBalance();
     final budgets = await budgetUsages(p.start);
+    final summaryResult = await summaryFuture;
+    final available = await availableToSpendBreakdown(
+      now,
+      totalBalance: await totalBalanceFuture,
+      monthIncome: summaryResult.income,
+    );
     return FinancialMetrics(
-      summary: await summary(p),
+      summary: summaryResult,
       netSaved: await netSaved(p),
       essentialExpense: await essentialExpense(p),
       familySupport: await familySupportExpense(p),
@@ -492,7 +579,7 @@ class FinanceService {
       budgetUsed: budgets.fold(0, (s, b) => s + b.actual),
       budgetTotal: budgets.fold(0, (s, b) => s + b.budget.amount),
       emergency: await emergencyStatus(now),
-      available: await availableToSpendBreakdown(now),
+      available: available,
     );
   }
 }

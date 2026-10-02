@@ -16,6 +16,8 @@ import 'package:finbro_app/features/backup/domain/integrity_check.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
+import '../generated_migrations/schema_v2.dart' as v2db;
+
 void main() {
   late Directory tmp;
   late Directory attachments;
@@ -364,6 +366,49 @@ void main() {
     }
   });
 
+  test('a schema v2 backup restores through the migration and keeps its goals', () async {
+    // Database written by the v2 app (frozen schema), with a goal and its movement.
+    final v2File = File(p.join(tmp.path, 'v2.sqlite'));
+    final v2 = v2db.DatabaseAtV2(NativeDatabase(v2File));
+    const ts = '2026-09-01T10:00:00';
+    await v2.customStatement(
+      'INSERT INTO accounts (id, name, type, opening_balance, created_at, updated_at) '
+      "VALUES ('s1', 'Tabungan', 'savings', 2000000, '$ts', '$ts')",
+    );
+    await v2.customStatement(
+      'INSERT INTO goals (id, name, type, target_amount, current_amount, created_at, updated_at) '
+      "VALUES ('g1', 'Dana Darurat', 'emergency', 6000000, 1500000, '$ts', '$ts')",
+    );
+    await v2.customStatement(
+      'INSERT INTO goal_movements (id, goal_id, amount, movement_type, movement_at) '
+      "VALUES ('m1', 'g1', 1500000, 'contribution', '$ts')",
+    );
+    await v2.close();
+    final sqlite = v2File.readAsBytesSync();
+    final zip = tamper(
+      (await service.buildPackage(now)).bytes,
+      sqlite: sqlite,
+      manifest: (m) => {...m, 'schemaVersion': 2, 'sha256': sha256.convert(sqlite).toString()},
+    );
+
+    final validated = BackupService.validate(zip);
+    expect(validated.manifest.schemaVersion, 2);
+    final target = await Directory(p.join(tmp.path, 'from-v2', 'attachments')).create(recursive: true);
+    final dbFile = File(p.join(tmp.path, 'from-v2', 'finbro.sqlite'));
+    await BackupService.installBackup(validated, dbFile: dbFile, attachmentsDir: target, workDir: work);
+
+    final restored = AppDatabase(NativeDatabase(dbFile));
+    addTearDown(restored.close);
+    final goal = await restored.select(restored.goals).getSingle();
+    expect((goal.id, goal.currentAmount, goal.linkedAccountId), ('g1', 1500000, null));
+    expect(await count(restored, 'goal_movements'), 1);
+    final version = await restored.customSelect('PRAGMA user_version').getSingle();
+    expect(version.data.values.single, AppDatabase.currentSchemaVersion);
+    // The migrated database accepts the new link column.
+    await restored.customStatement("UPDATE goals SET linked_account_id = 's1'");
+    expect((await restored.select(restored.goals).getSingle()).linkedAccountId, 's1');
+  });
+
   test('restore drops triggers and views smuggled into the backup database', () async {
     await seedData();
     final zip = await withMutatedDb((d) async {
@@ -449,5 +494,24 @@ void main() {
     }
     expect(patched, 2);
     expect(() => BackupService.validate(bombZip), rejected('rusak'));
+  });
+
+  test('entry whose CRC32 does not match its content is rejected', () async {
+    // archive 4.3.0 ignores ZipDecoder's `verify` flag, so validation must
+    // itself compare the unpacked content against the header CRC.
+    await seedData();
+    final package = await service.buildPackage(now);
+
+    final corrupted = ZipDecoder().decodeBytes(package.bytes);
+    final attachment = corrupted.findFile('attachments/r1.jpg')!;
+    attachment.crc32 = (attachment.crc32 ?? 0) ^ 0xFFFF; // stale CRC, content untouched
+    final crcZip = ZipEncoder().encodeBytes(corrupted);
+
+    // The content itself still matches the manifest, so only the CRC catches it.
+    expect(() => BackupService.validate(crcZip), throwsA(isA<BackupException>()));
+    // Sanity check: an entry with a bad CRC but no manifest entry for it is
+    // rejected before unpacking anyway — the check must be the CRC, not the
+    // unknown-name path.
+    expect(corrupted.findFile('attachments/r1.jpg')!.name, 'attachments/r1.jpg');
   });
 }

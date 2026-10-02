@@ -34,12 +34,14 @@ class _LockScreenState extends ConsumerState<LockScreen> {
   bool _verifying = false;
   bool _biometricRunning = false;
   Timer? _ticker;
+  // Last known cooldown (null: none); _submit re-checks before verifying.
+  Duration? _cooldown;
 
   @override
   void initState() {
     super.initState();
     ref.read(appLockServiceProvider); // binds the persisted attempt limiter
-    _syncCooldown();
+    _refreshCooldown();
     if (widget.biometricEnabled) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _biometric());
     }
@@ -51,21 +53,21 @@ class _LockScreenState extends ConsumerState<LockScreen> {
     super.dispose();
   }
 
-  Duration? get _cooldown => _limiter.remaining(DateTime.now());
-
-  /// Keeps the countdown text fresh while a cooldown is active.
-  void _syncCooldown() {
-    _ticker?.cancel();
-    if (_cooldown == null) return;
-    _ticker = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (!mounted) return;
-      if (_cooldown == null) {
-        t.cancel();
-        setState(() => _error = null);
-      } else {
-        setState(() {});
-      }
+  /// Re-reads the cooldown; ticks every second while one is active so the
+  /// countdown text stays fresh.
+  Future<void> _refreshCooldown() async {
+    final cooldown = await _limiter.remaining();
+    if (!mounted) return;
+    setState(() {
+      if (cooldown == null && _cooldown != null) _error = null;
+      _cooldown = cooldown;
     });
+    if (cooldown == null) {
+      _ticker?.cancel();
+      _ticker = null;
+    } else {
+      _ticker ??= Timer.periodic(const Duration(seconds: 1), (_) => _refreshCooldown());
+    }
   }
 
   Future<void> _biometric() async {
@@ -73,7 +75,7 @@ class _LockScreenState extends ConsumerState<LockScreen> {
     _biometricRunning = true;
     try {
       if (await widget.authenticateBiometric()) {
-        _limiter.reset();
+        unawaited(_limiter.reset());
         widget.onUnlocked();
       }
     } finally {
@@ -102,21 +104,32 @@ class _LockScreenState extends ConsumerState<LockScreen> {
       return;
     }
     setState(() => _verifying = true);
+    if (await _limiter.remaining() != null) {
+      if (!mounted) return;
+      setState(() {
+        _verifying = false;
+        _pin = '';
+      });
+      await _refreshCooldown();
+      return;
+    }
     final ok = await ref.read(appLockServiceProvider).verifyPin(_pin);
     if (!mounted) return;
     if (ok) {
-      _limiter.reset();
+      unawaited(_limiter.reset());
       widget.onUnlocked();
       return;
     }
-    _limiter.recordFailure(DateTime.now());
+    await _limiter.recordFailure();
+    final cooldown = await _limiter.remaining();
+    if (!mounted) return;
     HapticFeedback.heavyImpact();
     setState(() {
       _verifying = false;
       _pin = '';
-      _error = _cooldown != null ? null : 'PIN salah. Sisa ${_limiter.attemptsLeft} percobaan.';
+      _error = cooldown != null ? null : 'PIN salah. Sisa ${_limiter.attemptsLeft} percobaan.';
     });
-    _syncCooldown();
+    await _refreshCooldown();
   }
 
   @override

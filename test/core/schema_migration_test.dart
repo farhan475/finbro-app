@@ -1,4 +1,4 @@
-import 'package:drift/drift.dart';
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift_dev/api/migrations_native.dart';
 import 'package:finbro_app/core/database/app_database.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -28,7 +28,7 @@ void main() {
     });
   }
 
-  test('v1 → v2 keeps ledger data and adds the query indexes', () async {
+  test('v1 → current keeps ledger data and adds the query indexes', () async {
     final schema = await verifier.schemaAt(1);
     const ts = '2026-09-01T10:00:00';
     schema.rawDatabase
@@ -53,7 +53,7 @@ void main() {
       );
 
     final db = AppDatabase(schema.newConnection());
-    await verifier.migrateAndValidate(db, 2);
+    await verifier.migrateAndValidate(db, AppDatabase.currentSchemaVersion);
 
     final txs = await (db.select(db.transactions)..orderBy([(t) => OrderingTerm.asc(t.id)])).get();
     expect(txs.map((t) => (t.id, t.type, t.amount, t.accountId, t.transferToAccountId)), [
@@ -82,6 +82,7 @@ void main() {
         'goal_movements_transaction_id',
         'recurring_instances_due_date_status',
         'recurring_instances_transaction_id',
+        'goals_linked_account_id',
       ]),
     );
 
@@ -95,6 +96,50 @@ void main() {
         .map((r) => r.read<String>('detail'))
         .get();
     expect(plan.join('\n'), contains('USING INDEX transactions_transaction_at'));
+    await db.close();
+  });
+
+  test('v2 → v3 keeps goals and movements and adds an empty, unique account link', () async {
+    final schema = await verifier.schemaAt(2);
+    const ts = '2026-09-01T10:00:00';
+    schema.rawDatabase
+      ..execute(
+        'INSERT INTO accounts (id, name, type, opening_balance, created_at, updated_at) '
+        "VALUES ('s1', 'Tabungan', 'savings', 2000000, '$ts', '$ts')",
+      )
+      ..execute(
+        'INSERT INTO goals (id, name, type, target_amount, current_amount, target_date, '
+        'monthly_target, priority, is_active, created_at, updated_at) VALUES '
+        "('g1', 'Dana Darurat', 'emergency', 6000000, 1500000, '2027-01-31', 500000, 3, 1, '$ts', '$ts'), "
+        "('g2', 'Laptop', 'custom', 15000000, 0, NULL, NULL, 0, 0, '$ts', '$ts')",
+      )
+      ..execute(
+        'INSERT INTO goal_movements (id, goal_id, amount, movement_type, movement_at) '
+        "VALUES ('m1', 'g1', 1500000, 'contribution', '2026-09-02T12:00:00')",
+      );
+
+    final db = AppDatabase(schema.newConnection());
+    await verifier.migrateAndValidate(db, 3);
+
+    final goals = await (db.select(db.goals)..orderBy([(g) => OrderingTerm.asc(g.id)])).get();
+    expect(
+      goals.map((g) => (g.id, g.name, g.type, g.targetAmount, g.currentAmount, g.priority, g.isActive, g.linkedAccountId)),
+      [
+        ('g1', 'Dana Darurat', GoalType.emergency, 6000000, 1500000, 3, true, null),
+        ('g2', 'Laptop', GoalType.custom, 15000000, 0, 0, false, null),
+      ],
+    );
+    expect((goals.first.targetDate, goals.first.monthlyTarget), (DateTime(2027, 1, 31), 500000));
+    expect((await db.select(db.goalMovements).get()).single.amount, 1500000);
+
+    // One account backs at most one goal; deleting it clears the link.
+    await db.customStatement("UPDATE goals SET linked_account_id = 's1' WHERE id = 'g1'");
+    await expectLater(
+      db.customStatement("UPDATE goals SET linked_account_id = 's1' WHERE id = 'g2'"),
+      throwsA(anything),
+    );
+    await db.customStatement("DELETE FROM accounts WHERE id = 's1'");
+    expect((await (db.select(db.goals)..where((g) => g.id.equals('g1'))).getSingle()).linkedAccountId, isNull);
     await db.close();
   });
 }

@@ -3,7 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../app/theme/app_theme.dart';
 import '../../../core/database/app_database.dart';
-import '../../../core/finance/finance_math.dart';
+import '../../../core/finance/finance_service.dart';
 import '../../../core/formatting/dates.dart';
 import '../../../core/formatting/money.dart';
 import '../../../shared/widgets/fin_widgets.dart';
@@ -49,11 +49,12 @@ class GoalIcon extends StatelessWidget {
 String formatMonths(double v) => v.toStringAsFixed(1).replaceAll('.', ',');
 
 /// Target date line: required monthly contribution, reached, or overdue.
-String? goalScheduleText(Goal g, DateTime now) {
+String? goalScheduleText(GoalProgress p, DateTime now) {
+  final g = p.goal;
   final date = g.targetDate;
   if (date == null) return null;
   final required = requiredMonthlyContribution(
-    current: g.currentAmount,
+    current: p.saved,
     target: g.targetAmount,
     targetDate: date,
     now: now,
@@ -66,17 +67,19 @@ String? goalScheduleText(Goal g, DateTime now) {
 
 /// Goal summary card used in the Goals tab.
 class GoalCard extends StatelessWidget {
-  const GoalCard({super.key, required this.goal, required this.now});
-  final Goal goal;
+  const GoalCard({super.key, required this.progress, required this.now});
+  final GoalProgress progress;
   final DateTime now;
 
   @override
   Widget build(BuildContext context) {
     final fin = context.fin;
     final muted = context.text.bodySmall!.copyWith(color: fin.muted);
-    final progress = goalProgress(goal.currentAmount, goal.targetAmount);
-    final schedule = goalScheduleText(goal, now);
+    final goal = progress.goal;
+    final percent = progress.percent;
+    final schedule = goalScheduleText(progress, now);
     final priority = goal.priority > 0 ? ' · Prioritas ${goalPriorityLabels[goal.priority]}' : '';
+    final linked = progress.linkedAccount;
     return FinCard(
       onTap: () => context.push(GoalPaths.goalDetail(goal.id)),
       child: Column(
@@ -101,18 +104,25 @@ class GoalCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              Text(formatPercent(progress), style: context.text.titleSmall),
+              Text(formatPercent(percent), style: context.text.titleSmall),
             ],
           ),
           const SizedBox(height: 10),
           Text(
-            '${formatRupiah(goal.currentAmount)} / ${formatRupiah(goal.targetAmount)}',
+            '${formatRupiah(progress.saved)} / ${formatRupiah(goal.targetAmount)}',
             style: context.text.bodyMedium,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
+          if (linked != null)
+            Text(
+              'Saldo account ${linked.name}',
+              style: muted,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
           const SizedBox(height: 8),
-          FinProgressBar(percent: progress),
+          FinProgressBar(percent: percent),
           if (schedule != null) ...[
             const SizedBox(height: 8),
             Text(schedule, style: muted),

@@ -4,7 +4,7 @@ import '../../../app/theme/app_theme.dart';
 import '../../../shared/widgets/fin_widgets.dart';
 
 /// `/settings/help`: troubleshooting for reminders and data safety. Reminders use
-/// inexact local alarms, so delivery can drift when the OS saves battery.
+/// exact alarms when allowed, else inexact ones that drift when the OS saves battery.
 class HelpScreen extends StatelessWidget {
   const HelpScreen({super.key});
 
@@ -36,8 +36,10 @@ class HelpScreen extends StatelessWidget {
           _HelpItem(
             icon: Icons.schedule,
             title: 'Waktu pengingat',
-            body: 'Pengingat memakai alarm lokal yang tidak presisi: bisa terlambat beberapa menit '
-                'saat HP dalam mode hemat daya. Pengingat dijadwalkan ulang setiap kali FinBro dibuka.',
+            body: 'Aktifkan "Pengingat tepat waktu" di Pengaturan → Notifikasi dan izinkan "Alarm & '
+                'pengingat" agar pengingat muncul tepat di jamnya. Tanpa izin itu, pengingat bisa '
+                'terlambat beberapa menit saat HP dalam mode hemat daya. Pengingat dijadwalkan ulang '
+                'setiap kali FinBro dibuka.',
           ),
           SizedBox(height: 8),
           SectionHeader('Keamanan data'),

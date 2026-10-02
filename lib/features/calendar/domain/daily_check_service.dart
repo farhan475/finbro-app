@@ -8,7 +8,7 @@ import '../../../core/formatting/dates.dart';
 import '../../../core/ledger/ledger_service.dart';
 import '../../../core/notifications/notification_service.dart' as notif;
 import '../../../core/notifications/notification_service.dart'
-    show NotificationIds, NotificationKind, NotificationService, dailyCheckPayload;
+    show NotificationIds, NotificationKind, NotificationService, dailyCheckPayload, exactRemindersActive;
 import '../../../core/providers.dart';
 import '../../../core/settings/app_settings_repository.dart';
 import '../../recurring/domain/due_dates.dart' show daysBetween, monthNames;
@@ -87,7 +87,8 @@ class DailyCheckService {
     final inWindow = !day.isBefore(today) && daysBetween(today, day) <= dailyCheckWindowDays;
     if (inWindow && await _dailyCheckEnabled()) {
       final t = await _dailyCheckTime();
-      await _notifications.scheduleDailyCheck(day, hour: t.$1, minute: t.$2);
+      final exact = await exactRemindersActive(settings, _notifications);
+      await _notifications.scheduleDailyCheck(day, hour: t.$1, minute: t.$2, exact: exact);
     }
   }
 
@@ -112,6 +113,8 @@ class DailyCheckService {
   /// Runs on every resume, so it diffs against the pending requests (one
   /// plugin call) and only schedules/cancels what differs: each plugin call
   /// rewrites the plugin's whole stored schedule on the platform thread.
+  /// The payloads carry the delivery mode, so a changed exact-alarm
+  /// permission or setting reschedules each reminder once.
   Future<void> reschedule(DateTime now) async {
     final today = dateOnly(now);
     final end = DateTime(today.year, today.month, today.day + dailyCheckWindowDays + 1);
@@ -119,6 +122,7 @@ class DailyCheckService {
     final enabled = onboarded && await _dailyCheckEnabled();
     final review = onboarded && await settings.getBool(SettingKeys.monthlyReviewEnabled, fallback: true);
     final t = await _dailyCheckTime();
+    final exact = (enabled || review) && await exactRemindersActive(settings, _notifications);
     final rows = await (db.select(db.dailyActivity)
           ..where(
             (d) => d.date.isBiggerOrEqualValue(sqlDate(today)) & d.date.isSmallerThanValue(sqlDate(end)),
@@ -136,9 +140,9 @@ class DailyCheckService {
       final day = DateTime(today.year, today.month, today.day + i);
       final unknown = (status[day] ?? ActivityStatus.unknown) == ActivityStatus.unknown && (counts[day] ?? 0) == 0;
       if (enabled && unknown) {
-        final payload = jsonEncode(dailyCheckPayload(day, hour: t.$1, minute: t.$2));
+        final payload = jsonEncode(dailyCheckPayload(day, hour: t.$1, minute: t.$2, exact: exact));
         if (pending[NotificationIds.dailyCheck(day)] != payload) {
-          await _notifications.scheduleDailyCheck(day, hour: t.$1, minute: t.$2);
+          await _notifications.scheduleDailyCheck(day, hour: t.$1, minute: t.$2, exact: exact);
         }
       } else {
         await cancelIfPending(NotificationIds.dailyCheck(day));
@@ -153,7 +157,11 @@ class DailyCheckService {
         await cancelIfPending(id);
         continue;
       }
-      final payload = {'kind': NotificationKind.monthlyReview, 'month': isoDate(month).substring(0, 7)};
+      final payload = {
+        'kind': NotificationKind.monthlyReview,
+        'month': isoDate(month).substring(0, 7),
+        'exact': exact,
+      };
       if (pending[id] == jsonEncode(payload)) continue;
       final last = monthEnd(month);
       await _notifications.schedule(
@@ -162,6 +170,7 @@ class DailyCheckService {
         title: 'Monthly review',
         body: monthlyReviewBody(month),
         payload: payload,
+        exact: exact,
       );
     }
   }

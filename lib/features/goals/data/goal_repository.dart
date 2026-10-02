@@ -11,15 +11,23 @@ final goalRepositoryProvider = Provider<GoalRepository>(
   (ref) => GoalRepository(ref.watch(databaseProvider)),
 );
 
-/// All goals (active and archived): priority DESC, created_at ASC.
-final goalsProvider = FutureProvider<List<Goal>>((ref) {
+/// All goals (active and archived) with progress: priority DESC, created_at ASC.
+final goalsProvider = FutureProvider<List<GoalProgress>>((ref) {
   ref.watch(dbChangesProvider);
-  return ref.watch(goalRepositoryProvider).all();
+  return ref.watch(financeServiceProvider).goalProgresses();
 });
 
-final goalProvider = FutureProvider.autoDispose.family<Goal?, String>((ref, id) {
+final goalProvider = FutureProvider.autoDispose.family<GoalProgress?, String>((ref, id) async {
   ref.watch(dbChangesProvider);
-  return ref.watch(goalRepositoryProvider).get(id);
+  return (await ref.watch(financeServiceProvider).goalProgresses(goalId: id)).firstOrNull;
+});
+
+/// Savings accounts a goal may link to: active, not linked to another goal,
+/// plus the goal's current link (even when archived). Argument: goal id
+/// (null for a new goal).
+final linkableAccountsProvider = FutureProvider.autoDispose.family<List<Account>, String?>((ref, goalId) {
+  ref.watch(dbChangesProvider);
+  return ref.watch(goalRepositoryProvider).linkableAccounts(goalId: goalId);
 });
 
 /// Movements of one goal, newest first.
@@ -51,16 +59,12 @@ extension MovementTypeLabel on MovementType {
 /// Goals and their movements (FR-GOA-001..003). Money stays in accounts;
 /// `goals.current_amount` is a cache of SUM(goal_movements.amount) rebuilt by
 /// [recomputeGoalAmount] inside the same DB transaction as every movement write.
+/// A goal linked to a Savings account follows that account's balance instead
+/// ([GoalProgress]); it takes no new movements, its history is kept for when
+/// it is unlinked.
 class GoalRepository {
   GoalRepository(this.db);
   final AppDatabase db;
-
-  Future<List<Goal>> all() => (db.select(db.goals)
-        ..orderBy([
-          (g) => OrderingTerm.desc(g.priority),
-          (g) => OrderingTerm.asc(g.createdAt),
-        ]))
-      .get();
 
   Future<Goal?> get(String id) =>
       (db.select(db.goals)..where((g) => g.id.equals(id))).getSingleOrNull();
@@ -70,6 +74,23 @@ class GoalRepository {
         ..orderBy([(m) => OrderingTerm.desc(m.movementAt)]))
       .get();
 
+  /// See [linkableAccountsProvider].
+  Future<List<Account>> linkableAccounts({String? goalId}) async {
+    final current = goalId == null ? null : (await get(goalId))?.linkedAccountId;
+    final taken = {
+      for (final g in await (db.select(db.goals)..where((g) => g.linkedAccountId.isNotNull())).get())
+        if (g.id != goalId) g.linkedAccountId!,
+    };
+    final savings = await (db.select(db.accounts)
+          ..where((a) => a.type.equalsValue(AccountType.savings))
+          ..orderBy([(a) => OrderingTerm.asc(a.createdAt)]))
+        .get();
+    return [
+      for (final a in savings)
+        if (a.id == current || (a.isActive && !taken.contains(a.id))) a,
+    ];
+  }
+
   Future<String> create({
     required String name,
     required GoalType type,
@@ -77,26 +98,32 @@ class GoalRepository {
     DateTime? targetDate,
     int? monthlyTarget,
     int priority = 0,
+    String? linkedAccountId,
   }) async {
     final cleanName = _validate(name, targetAmount, monthlyTarget, priority);
     final id = newId();
     final now = DateTime.now();
-    await db.into(db.goals).insert(
-      GoalsCompanion.insert(
-        id: id,
-        name: cleanName,
-        type: type,
-        targetAmount: targetAmount,
-        targetDate: Value(targetDate),
-        monthlyTarget: Value(monthlyTarget),
-        priority: Value(priority),
-        createdAt: now,
-        updatedAt: now,
-      ),
-    );
+    await db.transaction(() async {
+      await _checkLink(goalId: null, accountId: linkedAccountId, previous: null);
+      await db.into(db.goals).insert(
+        GoalsCompanion.insert(
+          id: id,
+          name: cleanName,
+          type: type,
+          targetAmount: targetAmount,
+          targetDate: Value(targetDate),
+          monthlyTarget: Value(monthlyTarget),
+          priority: Value(priority),
+          linkedAccountId: Value(linkedAccountId),
+          createdAt: now,
+          updatedAt: now,
+        ),
+      );
+    });
     return id;
   }
 
+  /// [linkedAccountId] null unlinks: progress returns to the movements.
   Future<void> update(
     String id, {
     required String name,
@@ -105,20 +132,34 @@ class GoalRepository {
     DateTime? targetDate,
     int? monthlyTarget,
     int priority = 0,
+    String? linkedAccountId,
   }) async {
     final cleanName = _validate(name, targetAmount, monthlyTarget, priority);
-    await (db.update(db.goals)..where((g) => g.id.equals(id))).write(
-      GoalsCompanion(
-        name: Value(cleanName),
-        type: Value(type),
-        targetAmount: Value(targetAmount),
-        targetDate: Value(targetDate),
-        monthlyTarget: Value(monthlyTarget),
-        priority: Value(priority),
-        updatedAt: Value(DateTime.now()),
-      ),
-    );
+    await db.transaction(() async {
+      final goal = await get(id);
+      if (goal == null) throw const LedgerValidationException('Tujuan tidak ditemukan.');
+      await _checkLink(goalId: id, accountId: linkedAccountId, previous: goal.linkedAccountId);
+      await (db.update(db.goals)..where((g) => g.id.equals(id))).write(
+        GoalsCompanion(
+          name: Value(cleanName),
+          type: Value(type),
+          targetAmount: Value(targetAmount),
+          targetDate: Value(targetDate),
+          monthlyTarget: Value(monthlyTarget),
+          priority: Value(priority),
+          linkedAccountId: Value(linkedAccountId),
+          updatedAt: Value(DateTime.now()),
+        ),
+      );
+    });
   }
+
+  /// Stops following the linked account; progress returns to the movements
+  /// (their history is kept).
+  Future<void> unlink(String id) =>
+      (db.update(db.goals)..where((g) => g.id.equals(id))).write(
+        GoalsCompanion(linkedAccountId: const Value(null), updatedAt: Value(DateTime.now())),
+      );
 
   /// Archive (`false`) or restore (`true`). Archived goals keep history but
   /// no longer count as reserved money / Emergency Fund balance.
@@ -160,6 +201,11 @@ class GoalRepository {
       if (!goal.isActive) {
         throw const LedgerValidationException('Tujuan sudah diarsipkan.');
       }
+      if (goal.linkedAccountId != null) {
+        throw const LedgerValidationException(
+          'Tujuan ini mengikuti saldo account Savings-nya. Tambah atau tarik dana dengan transfer.',
+        );
+      }
       if (goal.currentAmount + signed < 0) {
         throw const LedgerValidationException('Dana tujuan tidak mencukupi.');
       }
@@ -194,6 +240,36 @@ class GoalRepository {
     await (db.delete(db.goalMovements)..where((x) => x.id.equals(movementId))).go();
     await recomputeGoalAmount(db, m.goalId);
   });
+
+  /// A link must name an existing Savings account that no other goal uses.
+  /// A new link also needs an active account; keeping the current link of an
+  /// archived account is allowed. The unique index is the final guard.
+  Future<void> _checkLink({
+    required String? goalId,
+    required String? accountId,
+    required String? previous,
+  }) async {
+    if (accountId == null) return;
+    final account = await (db.select(db.accounts)..where((a) => a.id.equals(accountId)))
+        .getSingleOrNull();
+    if (account == null) throw const LedgerValidationException('Account tidak ditemukan.');
+    if (account.type != AccountType.savings) {
+      throw const LedgerValidationException('Hanya account Savings yang bisa dihubungkan ke tujuan.');
+    }
+    if (accountId != previous && !account.isActive) {
+      throw const LedgerValidationException('Account yang diarsipkan tidak bisa dihubungkan ke tujuan.');
+    }
+    final other = await (db.select(db.goals)
+          ..where((g) => g.linkedAccountId.equals(accountId))
+          ..limit(1))
+        .getSingleOrNull();
+    if (other != null && other.id != goalId) {
+      throw LedgerValidationException(
+        'Account "${account.name}" sudah terhubung ke tujuan "${other.name}". '
+        'Satu account Savings hanya bisa untuk satu tujuan.',
+      );
+    }
+  }
 
   static String _validate(String name, int targetAmount, int? monthlyTarget, int priority) {
     final n = name.trim();

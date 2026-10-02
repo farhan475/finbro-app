@@ -7,11 +7,11 @@ Personal finance app for Android, offline-first, single user. The spec is the pl
 | Area | Choice |
 |---|---|
 | UI | Flutter 3.47 / Dart 3.13, Material 3, monochrome surfaces + lime accent `#5BEB12` (light/dark), Inter font bundled offline |
-| Database | SQLite via Drift (`lib/core/database`), schema v2 (v1 frozen baseline + query indexes), stepwise migrations |
+| Database | SQLite via Drift (`lib/core/database`), schema v3 (frozen v1 baseline + query indexes, v2–v3 migrations) |
 | State | flutter_riverpod 3 (manual providers, no codegen) |
 | Routing | go_router (bottom nav: Home, Transaksi, Budget, Analitik, Lainnya; Tujuan Keuangan from Lainnya/Home) |
 | Charts | fl_chart |
-| Notifications | flutter_local_notifications + timezone (local only) |
+| Notifications | flutter_local_notifications + timezone (local; exact Android scheduling with inexact fallback) |
 | OCR | google_mlkit_text_recognition (on-device, Latin) |
 | Backup | zip (archive) + file_picker |
 | App lock | PIN (salted, iterated SHA-256) + local_auth biometrics |
@@ -44,7 +44,7 @@ flutter pub get
 dart run build_runner build        # only after changing Drift tables
 flutter test
 flutter run -d <android-device>
-flutter build apk --release --split-per-abi   # per-CPU APKs, signed with the release key
+flutter build apk --release                   # universal APK, signed with the release key
 flutter build appbundle --release             # AAB for Play Store
 ```
 
@@ -78,10 +78,14 @@ On desktop (Linux) the app runs for development. OCR, the camera, and notificati
 - No SQLCipher: the app relies on OS storage protection plus the app lock.
 - The UI mixes Bahasa Indonesia and English financial terms, as in the mockup. Colors follow the monochrome spec, not the violet swatches in the mockup.
 
-## Deviations / not done
+## Roadmap status
 
-- Onboarding allocation steps by 5%; finer values are edited in Settings → Planning & alokasi.
-- The scan attachment stores the original photo; the cropped/rotated copy is only used for OCR.
+- Seed merchant Indonesia: implemented with scan suggestions and tests.
+- Exact notification scheduling: implemented on Android with permission check and inexact fallback; device delivery still needs validation.
+- Multi-currency, Android home-screen widget, and bank CSV/PDF import: not implemented.
+- Encrypted folder backup via SAF: implemented; cloud sync using that format is not implemented.
+
+## Deviations / not done
 
 ## Verified on device (Xiaomi 14T, Android 16 / HyperOS 3)
 
@@ -90,7 +94,7 @@ On desktop (Linux) the app runs for development. OCR, the camera, and notificati
 - Budget alerts at 85% and 100%, no repeated alert for the same threshold.
 - App lock: wrong PIN rejected with attempt counter, correct PIN and fingerprint unlock, relock on resume.
 - Backup to Downloads via the system save dialog (manifest checksum matches), CSV export, restore preview from a picked file.
-- Pending on device: OCR accuracy on real receipts/screenshots, the new crop step, PDF export.
+- Pending on device: latest navbar/FAB visual correction, OCR accuracy on real receipts/screenshots, the new crop step, PDF export.
 
 ## Implementation status (planning-pack TODO.md)
 

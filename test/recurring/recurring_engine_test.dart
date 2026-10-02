@@ -70,6 +70,15 @@ void main() {
     expect((await instances()).map((i) => i.dueDate), [DateTime(2026, 9, 30), DateTime(2026, 10, 31)]);
   });
 
+
+  test('rule created while a sync is queued is included in serialized sync', () async {
+    final sync = engine.sync(now);
+    final create = repo.create(salary());
+    await Future.wait([sync, create]);
+
+    final created = await instances();
+    expect(created.map((i) => i.dueDate), [DateTime(2026, 9, 25), DateTime(2026, 10, 25)]);
+  });
   test('sync is idempotent: no duplicate instances for the same rule/date', () async {
     await repo.create(salary());
     await engine.sync(now);
@@ -292,5 +301,34 @@ void main() {
     final id = (await db.select(db.recurringRules).getSingle()).id;
     await repo.update(id, salary(amount: 6000000));
     expect(notifications.scheduled, [NotificationIds.recurring(upcoming.id)]);
+  });
+
+  test('reminder mode follows the exact-alarm permission; a flip reschedules once', () async {
+    final notifications = FakeNotifications()..exactAllowed = false;
+    engine = RecurringEngine(db, ledger, clock: () => now, notifications: notifications);
+    repo = RecurringRepository(db, engine, clock: () => now);
+    await repo.create(salary());
+    final id = NotificationIds.recurring((await instances()).last.id);
+    expect(notifications.exact, {id: false});
+
+    notifications.resetCalls();
+    await engine.sync(now);
+    expect(notifications.pluginCalls, 0);
+
+    notifications.exactAllowed = true;
+    await engine.sync(now);
+    expect(notifications.scheduled, [id]);
+    expect(notifications.cancelled, isEmpty);
+    expect(notifications.exact, {id: true});
+
+    notifications.resetCalls();
+    await engine.sync(now);
+    expect(notifications.pluginCalls, 0);
+
+    // Setting off: inexact although Android allows exact alarms.
+    await AppSettingsRepository(db).setBool(SettingKeys.exactReminders, false);
+    await engine.sync(now);
+    expect(notifications.scheduled, [id]);
+    expect(notifications.exact, {id: false});
   });
 }

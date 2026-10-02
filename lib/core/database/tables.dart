@@ -144,19 +144,33 @@ class Budgets extends Table with _Timestamps {
   List<String> get customConstraints => ['CHECK (amount > 0)'];
 }
 
+// Schema v3: a goal may follow one Savings account's calculated balance
+// instead of its movements; one account backs at most one goal.
+@TableIndex.sql(
+  'CREATE UNIQUE INDEX goals_linked_account_id ON goals (linked_account_id) '
+  'WHERE linked_account_id IS NOT NULL',
+)
 class Goals extends Table with _Timestamps {
   TextColumn get id => text()();
   TextColumn get name => text().withLength(min: 1, max: 60)();
   TextColumn get type => text().map(const DbEnumConverter(GoalType.values))();
   IntColumn get targetAmount => integer()();
 
-  /// Cache of SUM(goal_movements.amount); rebuilt by GoalRepository.
+  /// Cache of SUM(goal_movements.amount); rebuilt by GoalRepository. Progress
+  /// of an unlinked goal only (see FinanceService.goalProgresses).
   IntColumn get currentAmount => integer().withDefault(const Constant(0))();
   TextColumn get targetDate =>
       text().map(const DateOnlyConverter()).nullable()();
   IntColumn get monthlyTarget => integer().nullable()();
   IntColumn get priority => integer().withDefault(const Constant(0))();
   BoolColumn get isActive => boolean().withDefault(const Constant(true))();
+
+  /// Savings account whose calculated balance is this goal's progress (v3).
+  TextColumn get linkedAccountId => text().nullable().references(
+    Accounts,
+    #id,
+    onDelete: KeyAction.setNull,
+  )();
 
   @override
   Set<Column> get primaryKey => {id};

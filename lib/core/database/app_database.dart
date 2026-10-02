@@ -45,7 +45,7 @@ class AppDatabase extends _$AppDatabase {
 
   /// Bump together with a new `if (from < N)` step in [migration], then dump
   /// the schema into `drift_schemas/` (see CHANGELOG release policy).
-  static const int currentSchemaVersion = 2;
+  static const int currentSchemaVersion = 3;
 
   @override
   int get schemaVersion => currentSchemaVersion;
@@ -75,6 +75,10 @@ class AppDatabase extends _$AppDatabase {
         ]) {
           await m.create(index);
         }
+      }
+      if (from < 3) {
+        await m.addColumn(goals, goals.linkedAccountId);
+        await m.create(goalsLinkedAccountId);
       }
     },
     beforeOpen: (details) async {

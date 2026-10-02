@@ -13,6 +13,7 @@ abstract final class SettingKeys {
   static const dailyCheckTime = 'daily_check_time'; // HH:mm, default 20:30
   static const monthlyReviewEnabled = 'monthly_review_enabled';
   static const budgetAlertsEnabled = 'budget_alerts_enabled';
+  static const exactReminders = 'exact_reminders_enabled'; // true | false, default true
   static const pinHash = 'pin_hash';
   static const pinSalt = 'pin_salt';
   static const biometricEnabled = 'biometric_enabled';
@@ -20,6 +21,13 @@ abstract final class SettingKeys {
   static const pinLimiter = 'pin_limiter'; // JSON {failures, until}; device-local
   static const lastBackupAt = 'last_backup_at'; // ISO local
   static const hideBalance = 'hide_balance'; // true | false (Home eye toggle)
+  // Encrypted folder backup (device-local: never in backups, kept on restore).
+  static const folderBackupUri = 'folder_backup_uri'; // SAF tree URI
+  static const folderBackupName = 'folder_backup_name'; // folder display name
+  static const folderBackupInterval = 'folder_backup_interval'; // daily | weekly, default daily
+  static const folderBackupKeep = 'folder_backup_keep'; // files kept, default 7
+  static const folderBackupLastAt = 'folder_backup_last_at'; // ISO local, last success
+  static const folderBackupLastError = 'folder_backup_last_error'; // JSON {at, message}
 }
 
 final appSettingsRepositoryProvider = Provider<AppSettingsRepository>(

@@ -2,11 +2,11 @@
 
 Date: 2 Oktober 2026 · Version 1.0.0+1 · `id.finbro.app`
 
-**Status:** semua bug dan temuan audit yang diketahui sudah ditutup di kode (`bug.md`, `audit.md`). Belum ada target rilis; app dijaga tetap siap rilis. Yang tersisa: validasi di perangkat setelah perubahan 2 Okt dan tindakan owner.
+**Status:** tidak ada target rilis; app dijaga tetap siap rilis. Validasi perangkat setelah perubahan 2 Okt dan UI release terbaru belum tuntas; lihat daftar pemeriksaan dan hasil sesi di bawah.
 
 ## Verified
 
-- `flutter analyze`: no issues. `flutter test`: 212 passing (finance rules, recurring engine incl. reminder diff, backup restore hardening, relock timer, lock gate widget test, cursor pagination, migrations).
+- `flutter analyze`: no issues. Full test suite passed 243 tests before the latest navbar/FAB adjustment; after that adjustment, `flutter analyze` stayed clean and the three targeted suites passed.
 - Diverifikasi di perangkat 1 Okt (sebelum perubahan 2 Okt), release build di Xiaomi 14T (Android 16 / HyperOS):
   - Onboarding, income/expense/transfer, edit/delete, transfer, budget alert 85%, konfirmasi gaji recurring.
   - Notifikasi: budget alert, reminder gaji, daily check (juga layar mati), "Nanti" +1 jam, "Tidak ada" dari background isolate; alarm dipulihkan setelah reboot.
@@ -22,7 +22,13 @@ Date: 2 Oktober 2026 · Version 1.0.0+1 · `id.finbro.app`
 - Backup/restore dengan validasi skema dan batas ukuran baru; pesan error backup terlalu besar.
 - Saldo Home dengan transaksi bertanggal masa depan; Savings Rate dengan aturan baru.
 - Tampilan lime accent (revisi UI 1 Okt belum dicek di perangkat).
-- "Muat lebih banyak" di Transaksi dan detail account dengan >200 transaksi.
+
+## Validasi sesi ini
+
+- Revisi UI terakhir: active item navbar hanya memakai warna accent pada ikon/teks (tanpa pill); FAB Home dinaikkan dan padding bawah list ditambah setelah pengguna melaporkan FAB tertutup navbar.
+- `flutter analyze`: no issues; tiga test terkait lulus. UI perangkat release belum disetujui; screenshot ADB sebelumnya menampilkan hitam dan ponsel kembali ke launcher.
+- APK universal release berhasil dibangun dan diverifikasi tanda tangannya, lalu dipasang melalui ADB. Jangan anggap UI release terverifikasi sampai diperiksa ulang di perangkat.
+- Flutter Web/Chrome belum berhasil dibangun karena SQLite/Drift memakai `dart:ffi`.
 
 ## Validation pending (owner)
 
@@ -51,14 +57,17 @@ Date: 2 Oktober 2026 · Version 1.0.0+1 · `id.finbro.app`
 - Model bisnis: gratis penuh untuk sekarang. Kemungkinan berbayar nanti: OCR dan laporan PDF yang bisa dikustomisasi (layout, bentuk, warna).
 - Offline-first tetap prinsip utama; sync dilakukan saat ada koneksi/kuota.
 
-## Roadmap (disetujui, belum dikerjakan)
+## Roadmap
 
-1. Seed merchant Indonesia (Indomaret, Alfamart, GoFood, …) → saran kategori saat scan pertama.
-2. Notifikasi exact untuk reminder gaji dan reminder recurring lainnya (`SCHEDULE_EXACT_ALARM`/`USE_EXACT_ALARM` + fallback inexact bila izin ditolak).
-3. Multi-currency (account per mata uang, kurs manual karena offline; laporan dalam mata uang utama).
-4. Widget home screen (saldo/available to spend; menghormati lock dan "sembunyikan saldo").
-5. Impor mutasi bank dari CSV dan PDF (parser per bank, review draft, deteksi duplikat).
-6. Backup terenkripsi ke folder pilihan pengguna (SAF), lalu sync cloud offline-first yang memakai format terenkripsi yang sama.
+| Item | Status codebase |
+|---|---|
+| Seed merchant Indonesia dan saran kategori saat scan | Selesai; seed + test di `test/scanner/merchant_seed_test.dart`. |
+| Notifikasi exact dengan fallback inexact | Selesai di Android; izin `SCHEDULE_EXACT_ALARM`, pengecekan izin, fallback, dan pengaturan sudah ada. Validasi perilaku pada perangkat masih perlu dilakukan. |
+| Multi-currency dengan kurs manual | Belum dikerjakan. Akun dan seluruh laporan saat ini memakai IDR. |
+| Widget home screen dengan perlindungan lock/sembunyikan saldo | Belum dikerjakan. Belum ada Android App Widget/provider. |
+| Impor mutasi bank CSV/PDF dengan review dan deteksi duplikat | Belum dikerjakan. |
+| Backup terenkripsi ke folder pilihan pengguna (SAF) | Selesai; backup terenkripsi folder sudah tersedia. |
+| Sinkronisasi cloud offline-first memakai format backup terenkripsi | Belum dikerjakan; butuh desain sinkronisasi dan endpoint/penyedia cloud. |
 
 ## Docs
 

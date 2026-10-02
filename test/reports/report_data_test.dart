@@ -155,7 +155,7 @@ void main() {
     await goal('mid-new', GoalType.custom, 0, priority: 2);
     final c = container();
     final goals = await readAsync(c, homeGoalsProvider);
-    expect([for (final g in goals) g.id], ['high', 'mid-old']);
+    expect([for (final g in goals) g.goal.id], ['high', 'mid-old']);
   });
 
   test('dashboard cash flow is cumulative up to today', () async {

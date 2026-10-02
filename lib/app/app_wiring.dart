@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 
 import '../core/ledger/ledger_service.dart';
+import '../features/backup/data/folder_backup_platform.dart';
 import '../features/budgets/domain/budget_alert_service.dart';
 import '../features/calendar/domain/daily_check_service.dart';
 import '../features/recurring/domain/recurring_engine.dart';
@@ -29,6 +30,8 @@ List<Override> wiringOverrides() => [
       ref.read(startupChecksProvider).run,
       ref.read(recurringEngineProvider).sync,
       ref.read(dailyCheckServiceProvider).reschedule,
+      // Last, after recurring auto-posts; starts in the background and returns.
+      ref.read(folderBackupServiceProvider).onLifecycle,
     ],
   ),
 ];

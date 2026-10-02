@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme/app_theme.dart';
-import '../../../core/providers.dart';
 import '../../../shared/widgets/category_icon.dart';
 import '../../../shared/widgets/fin_widgets.dart';
 import '../domain/app_lock_service.dart';
@@ -37,11 +36,7 @@ class SecurityScreen extends ConsumerWidget {
     );
     if (values == null || !context.mounted) return;
     try {
-      await ref.read(appLockServiceProvider).changePin(
-        current: values[0],
-        next: values[1],
-        now: ref.read(clockProvider)(),
-      );
+      await ref.read(appLockServiceProvider).changePin(current: values[0], next: values[1]);
       if (context.mounted) showSnack(context, 'PIN diperbarui.');
     } on PinException catch (e) {
       if (context.mounted) showSnack(context, e.message);
@@ -57,7 +52,7 @@ class SecurityScreen extends ConsumerWidget {
     );
     if (values == null || !context.mounted) return;
     try {
-      await ref.read(appLockServiceProvider).disable(current: values[0], now: ref.read(clockProvider)());
+      await ref.read(appLockServiceProvider).disable(current: values[0]);
       if (context.mounted) showSnack(context, 'App lock dinonaktifkan.');
     } on PinException catch (e) {
       if (context.mounted) showSnack(context, e.message);

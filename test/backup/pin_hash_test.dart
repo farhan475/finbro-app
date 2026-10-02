@@ -1,10 +1,18 @@
+import 'dart:convert';
+
 import 'package:finbro_app/core/database/app_database.dart';
 import 'package:finbro_app/core/settings/app_settings_repository.dart';
 import 'package:finbro_app/features/security/domain/app_lock_service.dart';
 import 'package:finbro_app/features/security/domain/pin_hasher.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../security/fake_elapsed_clock.dart';
+
 void main() {
+  // AppLockService uses the shared limiter on the system clock: without the
+  // Android channel it falls back to a process stopwatch.
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   test('PIN hash verifies the right PIN only, salted per setup', () {
     final salt = PinHasher.newSalt();
     final hash = PinHasher.hash('482913', salt);
@@ -32,8 +40,7 @@ void main() {
     addTearDown(db.close);
     final settings = AppSettingsRepository(db);
     final lock = AppLockService(settings);
-    final now = DateTime(2026, 9, 30, 12);
-    PinAttemptLimiter.instance.reset();
+    await PinAttemptLimiter.instance.reset();
 
     await lock.setPin('2468');
     expect(await lock.hasPin(), isTrue);
@@ -41,60 +48,151 @@ void main() {
     expect(await lock.verifyPin('2468'), isTrue);
     expect(await lock.verifyPin('1357'), isFalse);
 
-    await expectLater(lock.changePin(current: '0000', next: '1111', now: now), throwsA(isA<PinException>()));
-    await lock.changePin(current: '2468', next: '13579', now: now);
+    await expectLater(lock.changePin(current: '0000', next: '1111'), throwsA(isA<PinException>()));
+    await lock.changePin(current: '2468', next: '13579');
     expect(await lock.verifyPin('13579'), isTrue);
 
     await lock.setBiometricEnabled(true);
-    await lock.disable(current: '13579', now: now);
+    await lock.disable(current: '13579');
     expect(await lock.hasPin(), isFalse);
     expect(await settings.get(SettingKeys.biometricEnabled), isNull);
   });
 
-  test('five wrong attempts start a 30 s cooldown', () {
-    final limiter = PinAttemptLimiter();
-    final t0 = DateTime(2026, 9, 30, 12);
+  test('five wrong attempts start a 30 s cooldown', () async {
+    final clock = FakeElapsedClock();
+    final limiter = PinAttemptLimiter(clock: clock);
     for (var i = 0; i < 4; i++) {
-      limiter.recordFailure(t0);
+      await limiter.recordFailure();
     }
-    expect(limiter.remaining(t0), isNull);
+    expect(await limiter.remaining(), isNull);
     expect(limiter.attemptsLeft, 1);
-    limiter.recordFailure(t0);
-    expect(limiter.remaining(t0), const Duration(seconds: 30));
-    expect(limiter.remaining(t0.add(const Duration(seconds: 30))), isNull);
-    limiter.reset();
+    await limiter.recordFailure();
+    expect(await limiter.remaining(), const Duration(seconds: 30));
+    clock.elapsed += const Duration(seconds: 30);
+    expect(await limiter.remaining(), isNull);
+    await limiter.reset();
     expect(limiter.attemptsLeft, 5);
+  });
+
+  test('changing the wall clock has no effect on a cooldown; device sleep counts', () async {
+    final clock = FakeElapsedClock();
+    var wall = DateTime(2026, 9, 30, 12);
+    final limiter = PinAttemptLimiter(clock: clock, wall: () => wall);
+    for (var i = 0; i < 5; i++) {
+      await limiter.recordFailure();
+    }
+    wall = wall.add(const Duration(days: 1));
+    expect(await limiter.remaining(), const Duration(seconds: 30), reason: 'clock moved forward');
+    wall = wall.subtract(const Duration(days: 2));
+    expect(await limiter.remaining(), const Duration(seconds: 30), reason: 'clock moved back');
+    // Asleep for 31 s: the elapsed-since-boot clock keeps counting.
+    clock.elapsed += const Duration(seconds: 31);
+    expect(await limiter.remaining(), isNull);
   });
 
   test('cooldown escalates and survives an app restart', () async {
     final db = AppDatabase.memory();
     addTearDown(db.close);
     final settings = AppSettingsRepository(db);
-    final t0 = DateTime(2026, 9, 30, 12);
+    final clock = FakeElapsedClock();
 
-    final first = PinAttemptLimiter();
+    final first = PinAttemptLimiter(clock: clock);
     await first.bind(settings);
     for (var i = 0; i < 5; i++) {
-      first.recordFailure(t0);
+      await first.recordFailure();
     }
-    expect(first.remaining(t0), const Duration(seconds: 30));
-    final later = t0.add(const Duration(minutes: 2));
+    expect(await first.remaining(), const Duration(seconds: 30));
+    clock.elapsed += const Duration(minutes: 2);
     for (var i = 0; i < 5; i++) {
-      first.recordFailure(later);
+      await first.recordFailure();
     }
-    expect(first.remaining(later), const Duration(minutes: 1), reason: 'second lockout is longer');
-    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(await first.remaining(), const Duration(minutes: 1), reason: 'second lockout is longer');
+    clock.elapsed += const Duration(seconds: 10);
+    await first.saved;
 
-    // New process: fresh limiter, same store.
-    final restarted = PinAttemptLimiter();
+    // New process, same boot: fresh limiter, same store.
+    final restarted = PinAttemptLimiter(clock: clock);
     await restarted.bind(settings);
-    expect(restarted.remaining(later), const Duration(minutes: 1));
+    expect(await restarted.remaining(), const Duration(seconds: 50));
     expect(restarted.failures, 10);
 
-    restarted.reset();
-    await Future<void>.delayed(const Duration(milliseconds: 50));
-    final cleared = PinAttemptLimiter();
+    await restarted.reset();
+    await restarted.saved;
+    final cleared = PinAttemptLimiter(clock: clock);
     await cleared.bind(settings);
-    expect(cleared.remaining(later), isNull);
+    expect(await cleared.remaining(), isNull);
+  });
+
+  test('a reboot restarts the cooldown in full, never shortens it, and an ended one stays ended', () async {
+    final db = AppDatabase.memory();
+    addTearDown(db.close);
+    final settings = AppSettingsRepository(db);
+    final clock = FakeElapsedClock();
+
+    final before = PinAttemptLimiter(clock: clock);
+    await before.bind(settings);
+    for (var i = 0; i < 5; i++) {
+      await before.recordFailure();
+    }
+    clock.elapsed += const Duration(seconds: 20);
+    expect(await before.remaining(), const Duration(seconds: 10));
+    await before.saved;
+
+    // Rebooted with a longer uptime than the saved deadline: comparing raw
+    // elapsed times would end the cooldown, the boot count prevents it.
+    clock
+      ..boot = 'boot:2'
+      ..elapsed = const Duration(hours: 9);
+    final afterReboot = PinAttemptLimiter(clock: clock);
+    await afterReboot.bind(settings);
+    expect(await afterReboot.remaining(), const Duration(seconds: 30));
+    clock.elapsed += const Duration(seconds: 29);
+    expect(await afterReboot.remaining(), const Duration(seconds: 1));
+    await afterReboot.saved;
+
+    // The restarted deadline was saved for this boot.
+    final restarted = PinAttemptLimiter(clock: clock);
+    await restarted.bind(settings);
+    expect(await restarted.remaining(), const Duration(seconds: 1));
+
+    clock.elapsed += const Duration(seconds: 1);
+    expect(await restarted.remaining(), isNull);
+    await restarted.saved;
+    clock
+      ..boot = 'boot:3'
+      ..elapsed = const Duration(seconds: 40);
+    final nextBoot = PinAttemptLimiter(clock: clock);
+    await nextBoot.bind(settings);
+    expect(await nextBoot.remaining(), isNull);
+    expect(nextBoot.failures, 5, reason: 'failures still count towards the next lockout');
+  });
+
+  test('the old wall-clock format is migrated, capped at the lockout cooldown', () async {
+    final db = AppDatabase.memory();
+    addTearDown(db.close);
+    final settings = AppSettingsRepository(db);
+    final clock = FakeElapsedClock();
+    final wall = DateTime(2026, 9, 30, 12);
+    Future<PinAttemptLimiter> load(int failures, Duration untilFromNow) async {
+      await settings.set(
+        SettingKeys.pinLimiter,
+        jsonEncode({'failures': failures, 'until': wall.add(untilFromNow).millisecondsSinceEpoch}),
+      );
+      final limiter = PinAttemptLimiter(clock: clock, wall: () => wall);
+      await limiter.bind(settings);
+      await limiter.saved;
+      return limiter;
+    }
+
+    // Clock had been rolled back: no more than the 30 s first lockout.
+    expect(await (await load(5, const Duration(hours: 1))).remaining(), const Duration(seconds: 30));
+    final stored = jsonDecode((await settings.get(SettingKeys.pinLimiter))!) as Map<String, dynamic>;
+    expect(stored, isNot(contains('until')));
+    expect(stored['boot'], clock.boot);
+
+    expect(await (await load(10, const Duration(seconds: 20))).remaining(), const Duration(seconds: 20));
+    final expired = await load(10, const Duration(seconds: -1));
+    expect(await expired.remaining(), isNull);
+    expect(expired.failures, 10);
   });
 }

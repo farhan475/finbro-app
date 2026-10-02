@@ -145,30 +145,27 @@ class RecurringRepository {
     await _validate(d);
     final id = newId();
     final now = _clock();
-    await db.into(db.recurringRules).insert(
-      RecurringRulesCompanion.insert(
-        id: id,
-        type: d.type,
-        name: d.name.trim(),
-        amount: d.amount,
-        accountId: d.accountId,
-        categoryId: d.categoryId,
-        frequency: d.frequency,
-        intervalDays: Value(d.frequency == RecurringFrequency.custom ? d.intervalDays : null),
-        dayOfMonth: Value(_usesDayOfMonth(d.frequency) ? d.dayOfMonth : null),
-        dayOfWeek: Value(d.frequency == RecurringFrequency.weekly ? d.dayOfWeek : null),
-        monthOfYear: Value(d.frequency == RecurringFrequency.yearly ? d.monthOfYear : null),
-        startDate: dateOnly(d.startDate),
-        endDate: Value(d.endDate == null ? null : dateOnly(d.endDate!)),
-        reminderEnabled: Value(d.reminderEnabled),
-        reminderOffsetDays: Value(d.reminderOffsetDays),
-        reminderTime: Value(d.reminderTime),
-        autoConfirm: Value(d.autoConfirm),
-        createdAt: now,
-        updatedAt: now,
-      ),
-    );
-    await engine.sync(now);
+    await engine.createRule(id, RecurringRulesCompanion.insert(
+      id: id,
+      type: d.type,
+      name: d.name.trim(),
+      amount: d.amount,
+      accountId: d.accountId,
+      categoryId: d.categoryId,
+      frequency: d.frequency,
+      intervalDays: Value(d.frequency == RecurringFrequency.custom ? d.intervalDays : null),
+      dayOfMonth: Value(_usesDayOfMonth(d.frequency) ? d.dayOfMonth : null),
+      dayOfWeek: Value(d.frequency == RecurringFrequency.weekly ? d.dayOfWeek : null),
+      monthOfYear: Value(d.frequency == RecurringFrequency.yearly ? d.monthOfYear : null),
+      startDate: dateOnly(d.startDate),
+      endDate: Value(d.endDate == null ? null : dateOnly(d.endDate!)),
+      reminderEnabled: Value(d.reminderEnabled),
+      reminderOffsetDays: Value(d.reminderOffsetDays),
+      reminderTime: Value(d.reminderTime),
+      autoConfirm: Value(d.autoConfirm),
+      createdAt: now,
+      updatedAt: now,
+    ), now);
     return id;
   }
 

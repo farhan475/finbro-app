@@ -8,9 +8,10 @@ import '../../../core/settings/app_settings_repository.dart';
 import '../../../core/utilities/app_logger.dart';
 import '../../../shared/widgets/fin_widgets.dart';
 import '../../calendar/domain/daily_check_service.dart';
+import '../domain/recurring_engine.dart';
 
-/// `Routes.notificationSettings`: daily check, monthly review and budget
-/// alert toggles. Every change reschedules the daily/monthly reminders.
+/// `Routes.notificationSettings`: daily check, monthly review, budget alert
+/// and exact-delivery toggles. Every change reschedules the affected reminders.
 class NotificationSettingsScreen extends ConsumerWidget {
   const NotificationSettingsScreen({super.key});
 
@@ -107,6 +108,8 @@ class NotificationSettingsScreen extends ConsumerWidget {
                 'Pengingat transaksi berulang (H, H-1, H-3) diatur di masing-masing jadwal.',
                 style: context.text.bodySmall?.copyWith(color: fin.muted),
               ),
+              const SizedBox(height: 12),
+              _ExactRemindersCard(enabled: flag(SettingKeys.exactReminders)),
               const SizedBox(height: 24),
               OutlinedButton.icon(
                 onPressed: () => _requestPermission(context, ref),
@@ -116,6 +119,115 @@ class NotificationSettingsScreen extends ConsumerWidget {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+/// Whether Android currently allows exact alarms. Re-read on every resume:
+/// the user grants/revokes it in the system "Alarm & pengingat" screen.
+final exactAlarmsAllowedProvider = FutureProvider.autoDispose<bool>(
+  (ref) => NotificationService.instance.canScheduleExact(),
+);
+
+/// "Pengingat tepat waktu": setting toggle, current Android permission and
+/// a shortcut to the system permission screen.
+class _ExactRemindersCard extends ConsumerStatefulWidget {
+  const _ExactRemindersCard({required this.enabled});
+  final bool enabled;
+
+  @override
+  ConsumerState<_ExactRemindersCard> createState() => _ExactRemindersCardState();
+}
+
+class _ExactRemindersCardState extends ConsumerState<_ExactRemindersCard> {
+  late final _lifecycle = AppLifecycleListener(onResume: () => ref.invalidate(exactAlarmsAllowedProvider));
+
+  @override
+  void initState() {
+    super.initState();
+    _lifecycle; // Starts listening.
+  }
+
+  @override
+  void dispose() {
+    _lifecycle.dispose();
+    super.dispose();
+  }
+
+  /// Recurring, daily check and monthly review reminders pick the new mode
+  /// up through their payload diffs.
+  Future<void> _rescheduleAll() async {
+    final now = ref.read(clockProvider)();
+    try {
+      await ref.read(recurringEngineProvider).sync(now);
+      await ref.read(dailyCheckServiceProvider).reschedule(now);
+    } catch (e, s) {
+      AppLogger.error('Penjadwalan ulang pengingat gagal', e, s);
+    }
+  }
+
+  Future<void> _setEnabled(bool value) async {
+    await ref.read(appSettingsRepositoryProvider).setBool(SettingKeys.exactReminders, value);
+    await _rescheduleAll();
+  }
+
+  Future<void> _requestPermission() async {
+    final granted = await NotificationService.instance.requestExactPermission();
+    if (!mounted) return;
+    ref.invalidate(exactAlarmsAllowedProvider);
+    if (granted) await _rescheduleAll();
+    if (mounted) {
+      showSnack(context, granted ? 'Pengingat tepat waktu diizinkan' : 'Izin alarm tepat waktu belum diberikan');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final fin = context.fin;
+    final allowed = ref.watch(exactAlarmsAllowedProvider).value;
+    return FinCard(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Pengingat tepat waktu'),
+            subtitle: const Text('Gaji, transaksi berulang, daily check, dan monthly review muncul tepat di jamnya'),
+            value: widget.enabled,
+            onChanged: _setEnabled,
+          ),
+          if (widget.enabled) ...[
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                allowed == true ? Icons.check_circle_outline : Icons.alarm_off_outlined,
+                color: allowed == true ? fin.positive : fin.warning,
+              ),
+              title: Text(switch (allowed) {
+                null => 'Memeriksa izin Android…',
+                true => 'Diizinkan Android',
+                false => 'Belum diizinkan Android',
+              }),
+              subtitle: allowed == false
+                  ? const Text('Tanpa izin "Alarm & pengingat", pengingat bisa terlambat beberapa menit.')
+                  : null,
+              trailing: allowed == false
+                  ? TextButton(onPressed: _requestPermission, child: const Text('Izinkan'))
+                  : null,
+            ),
+            Text(
+              'Alarm tepat waktu sedikit lebih boros baterai. Beberapa merek HP (Xiaomi, Oppo, Vivo, '
+              'Realme) tetap bisa menahan notifikasi bila FinBro dibatasi penghemat baterai; lihat Bantuan.',
+              style: context.text.bodySmall?.copyWith(color: fin.muted),
+            ),
+          ] else
+            Text(
+              'Mati: pengingat memakai alarm hemat baterai dan bisa terlambat beberapa menit.',
+              style: context.text.bodySmall?.copyWith(color: fin.muted),
+            ),
+        ],
       ),
     );
   }

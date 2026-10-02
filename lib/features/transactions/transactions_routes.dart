@@ -20,6 +20,7 @@ final List<RouteBase> transactionsRoutes = [
     builder: (_, s) => TransactionFormScreen(
       initialType: _enumParam(TransactionType.values, s.uri.queryParameters['type']),
       initialAccountId: s.uri.queryParameters['account'],
+      initialTransferToAccountId: s.uri.queryParameters['to'],
     ),
   ),
   GoRoute(

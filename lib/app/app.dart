@@ -109,7 +109,7 @@ class _BootstrapState extends ConsumerState<_Bootstrap> with WidgetsBindingObser
         if (e.actionId == NotificationAction.noTransaction) {
           await markNoActivity(ref.read(databaseProvider), day);
         } else if (e.actionId == NotificationAction.remindLater) {
-          await scheduleRemindLater(day);
+          await scheduleRemindLater(day, exact: e.exact);
         } else {
           router.push(Routes.transactionNew());
         }

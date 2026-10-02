@@ -1,22 +1,27 @@
 # FinBro Implementation Summary
 
 Date: 2 Oktober 2026 · Version 1.0.0+1 · Application ID `id.finbro.app`
-Verified: `flutter analyze` clean, `flutter test` 212 passing. Last device test (signed release, Xiaomi 14T, Android 16): 1 Oktober, before the 2 Oktober fixes (see STATUS.md for what needs re-checking).
+Verified: `flutter analyze` clean. Earlier full suite: 243 passing; after the latest navbar/FAB change, three related suites passed. Device release UI is not verified; see `STATUS.md`.
 
 Spec: planning pack in `~/Downloads/finebro app/`. Details and decisions: `README.md`. Release readiness and open work: `STATUS.md`.
 
 ## Implemented (all planning-pack MVP phases 0–6)
 
-- Foundation: Flutter, Drift SQLite (schema v2 = frozen v1 baseline in `drift_schemas/` + 11 query indexes; migration tests in `test/core/schema_migration_test.dart`), Riverpod, go_router, light/dark theme from the UI reference (`~/Downloads/finebro app/FinBro_Contoh_UI.png`): monochrome surfaces + lime accent `#5BEB12`, Inter font, monochrome logo/icon.
+- Foundation: Flutter, Drift SQLite (schema v3 = frozen v1 baseline in `drift_schemas/` + query indexes and stepwise migrations; migration tests in `test/core/schema_migration_test.dart`), Riverpod, go_router, light/dark theme from the UI reference (`~/Downloads/finebro app/FinBro_Contoh_UI.png`): monochrome surfaces + lime accent `#5BEB12`, Inter font, monochrome logo/icon.
 - Navigation: bottom bar Home | Transaksi | Budget | Analitik (Laporan) | Lainnya; Tujuan Keuangan opens from Lainnya and the Home goals card.
 - Data: accounts, categories (seeded), transactions, attachments, budgets, goals + goal_movements, recurring rules/instances, daily_activity, planning_settings, app_settings, merchant_mappings.
 - Logic: ledger as the single write path; balances (confirmed rows dated up to now), available-to-spend, emergency fund, savings rate (net transfers into Savings accounts), budget usage, upcoming obligations (`lib/core/finance`).
 - Features: account/category CRUD (archived accounts reject new postings), income/expense/transfer, filter/search, edit/delete/duplicate, account reconciliation, budgets, goals, recurring (weekly/monthly/yearly/custom interval, H/H-1/H-3 reminders) with confirm/skip/auto-confirm, calendar, planning settings, onboarding, empty states, demo data (debug).
 - Reports: income vs expense, spending donut, top spending, budget vs actual, metrics panel (N/A on zero denominators), CSV export, PDF monthly report export.
-- Notifications (`flutter_local_notifications`, inexact scheduling, boot receiver): daily check with actions, budget thresholds, recurring/salary reminders, monthly review.
+- Notifications (`flutter_local_notifications`, exact scheduling with inexact fallback when permission is unavailable, boot receiver): daily check with actions, budget thresholds, recurring/salary reminders, monthly review.
 - Scan: ML Kit on-device OCR (camera, receipt from gallery, screenshot from gallery), preprocessing, crop step, receipt + screenshot parsers, confidence, merchant mapping, duplicate detection, draft review.
 - Security/reliability: PIN + biometric app lock (persistent escalating limiter, monotonic relock, FLAG_SECURE), ZIP backup/restore with manifest + checksum, schema/trigger/size validation and safety snapshot, integrity check (incl. missing/orphan attachments), local error log, backup reminder banner (>30 days or never) on Home, Lainnya and Settings. No network permissions in release.
 - Release: signed AAB/APKs (keystore in `~/finbro-keys/`), `docs/PRIVACY_POLICY.md`, `docs/PLAY_STORE.md`, CI (`.github/workflows/ci.yml`).
+
+## UI follow-up
+
+- Floating navbar uses a frosted glass surface. Active destination highlights icon and label with the accent only; no selected pill background.
+- Home add FAB was moved higher and the scroll clearance increased after the user reported it overlapped the navbar. The latest release UI still needs a successful on-device visual check; see `STATUS.md`.
 
 ## Change log 2 Oktober 2026
 
@@ -32,7 +37,7 @@ All open items from the 4-agent audit closed; details in `bug.md`, `audit.md`, `
 ### UI revision to the reference (FinBro_Contoh_UI.png) — not yet checked on device
 
 - Palette (`app_theme.dart` `FinColors`): light background `#F7F8FA`, surface `#FFFFFF`; dark background `#0B0D10`, surface `#12151A`; accent lime `#5BEB12` (replaced the first indigo pass; `accentText` for legible text on light surfaces, chart ramp derived from it); positive green, negative red, warning amber.
-- Theme: pill-shaped chips and segmented buttons; bottom nav without pill indicator, selected item in accent; progress bars accent on accent-tinted track (normal/attention budgets accent, warning amber, over red).
+- Theme: pill-shaped chips and segmented buttons; the earlier bottom nav used a selected indicator, later replaced by the current icon/text-only accent state without a selected shape; progress bars use accent-tinted tracks.
 - Bottom nav: Goals tab replaced by **Analitik** (Laporan as a tab); "More" renamed **Lainnya**; Tujuan Keuangan added to Lainnya. `/reports` is now a shell branch, `/goals` a top-level route; monthly-review notification uses `go`.
 - Home (`home_screen.dart`): avatar with initial + bell (opens Transaksi Berulang, dot when items await confirmation); Total Balance card with eye toggle (`SettingKeys.hideBalance`), change vs start of month ("↑ x% dari bulan lalu"), accent sparkline of the balance path this month (`BalanceSparkline`, `balancePath`), Income/Expense split inside the card; Available to Spend as a compact row; account chips moved to an "Akun" section. Separate Cash Flow card removed (trend now in the balance card; full chart stays in Laporan).
 - Charts: income line/bars in accent, curved income line with fading fill; budget-vs-actual "Actual" in accent.
@@ -51,17 +56,10 @@ All open items from the 4-agent audit closed; details in `bug.md`, `audit.md`, `
 - Backup reminder banner also on Home.
 - Device test results (release build, Xiaomi 14T, Android 16): see STATUS.md → Verified.
 
-## Not verified / open (see STATUS.md for the full list)
-
-- Notification delivery in deep Doze (only reached `INACTIVE`, phone was charging over USB) and on other OEMs/Android versions.
-- OCR on real photographed receipts (only synthetic images tested).
-- TalkBack walkthrough (semantics labels exist, read via uiautomator; no screen-reader pass).
-- Merchant mapping seed for Indonesian merchants (approved; on the roadmap in STATUS.md).
-
 ## Known limits (by design)
 
-- Single device, no sync, no cloud yet (encrypted folder backup, then offline-first sync, are on the roadmap). Backup is manual (reminder banner only).
-- Notifications are inexact: Android delivers them within a window (measured: daily check 20:00 → 20:03, reminder 19:40 → 19:43, "Nanti" +1h with a 45-min window). After a reboot they are restored only after the first unlock.
+- Single device, no sync/cloud yet (encrypted folder backup exists; offline-first sync is pending roadmap work). Backup is manual unless the user configures folder backups.
+- Exact reminders are supported when Android permission is allowed; otherwise scheduling falls back to inexact alarms. Delivery timing varies by device/Doze and needs validation.
 - No SQLCipher: OS storage protection plus app lock.
 - Recurring processing runs on app open/resume; no background service.
 - Onboarding allocation steps by 5%; finer values in Settings → Planning.
@@ -72,7 +70,7 @@ All open items from the 4-agent audit closed; details in `bug.md`, `audit.md`, `
 flutter pub get
 flutter test
 ln -sf ~/finbro-keys/key.properties android/key.properties   # gitignored; remove after building
-flutter build apk --release --split-per-abi
+flutter build apk --release                 # universal APK
 flutter build appbundle --release
 rm android/key.properties
 ```

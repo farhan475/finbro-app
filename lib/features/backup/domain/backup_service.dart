@@ -33,6 +33,13 @@ const deviceLocalSettingKeys = <String>[
   SettingKeys.lockTimeoutSeconds,
   SettingKeys.pinLimiter,
   integrityReportKey,
+  // The folder permission and its backup history belong to this device.
+  SettingKeys.folderBackupUri,
+  SettingKeys.folderBackupName,
+  SettingKeys.folderBackupInterval,
+  SettingKeys.folderBackupKeep,
+  SettingKeys.folderBackupLastAt,
+  SettingKeys.folderBackupLastError,
 ];
 
 /// `<app documents>/backups`, where every backup and safety snapshot is kept.
@@ -594,7 +601,16 @@ class BackupService {
       input.setPosition(start);
     }
     if (out.length != f.size) throw const FormatException('Entry size does not match its header');
-    return out.takeBytes();
+    // archive 4.3.0 ignores its `verify` flag (ZipDecoder's CRC check is
+    // commented out), so verify the CRC32 of the unpacked content here: bit
+    // rot or a truncated download must fail validation instead of restoring
+    // silently corrupted data.
+    final bytes = out.takeBytes();
+    final expectedCrc = f.crc32;
+    if (expectedCrc != null && getCrc32(bytes) != expectedCrc) {
+      throw const FormatException('Entry CRC32 does not match its content');
+    }
+    return bytes;
   }
 
   /// Checks the untrusted restored database on a plain connection, before

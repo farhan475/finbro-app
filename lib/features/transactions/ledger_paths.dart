@@ -9,6 +9,10 @@ abstract final class LedgerPaths {
   static String transactionNewForAccount(String accountId) =>
       '/transaction/new?account=${Uri.encodeQueryComponent(accountId)}';
 
+  /// New transfer into [accountId] (e.g. a goal's linked Savings account).
+  static String transferTo(String accountId) =>
+      '/transaction/new?type=${TransactionType.transfer.db}&to=${Uri.encodeQueryComponent(accountId)}';
+
   static const accountNew = '/accounts/new';
   static String accountDetail(String id) => '/accounts/$id';
   static String accountEdit(String id) => '/accounts/$id/edit';

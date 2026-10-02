@@ -163,7 +163,7 @@ void main() {
       expect(notifications.cancelled, isEmpty);
       expect(
         notifications.pending[NotificationIds.dailyCheck(today)],
-        jsonEncode(dailyCheckPayload(today, hour: 7, minute: 15)),
+        jsonEncode(dailyCheckPayload(today, hour: 7, minute: 15, exact: true)),
       );
 
       // A day that became NO_ACTIVITY elsewhere: only its pending id is cancelled.
@@ -184,6 +184,36 @@ void main() {
       expect(notifications.scheduled, isEmpty);
       expect(notifications.cancelled.toSet(), {...dailyIds, ...reviewIds}..remove(NotificationIds.dailyCheck(tomorrow)));
       expect(notifications.pending, isEmpty);
+    });
+
+    test('delivery mode follows the exact-alarm permission and setting', () async {
+      await settings.setBool(SettingKeys.onboardingDone, true);
+      notifications.exactAllowed = false;
+      await service.reschedule(now);
+      expect(notifications.exact.keys.toSet(), {...dailyIds, ...reviewIds});
+      expect(notifications.exact.values, everyElement(isFalse));
+
+      // Unchanged permission: nothing is rescheduled.
+      notifications.resetCalls();
+      await service.reschedule(now);
+      expect(notifications.pluginCalls, 0);
+
+      // Permission granted: every pending reminder is rescheduled exactly once, exact.
+      notifications.exactAllowed = true;
+      await service.reschedule(now);
+      expect(notifications.scheduled, [...dailyIds, ...reviewIds]);
+      expect(notifications.cancelled, isEmpty);
+      expect(notifications.exact.values, everyElement(isTrue));
+
+      notifications.resetCalls();
+      await service.reschedule(now);
+      expect(notifications.pluginCalls, 0);
+
+      // Setting off: always inexact, even while Android allows exact alarms.
+      await settings.setBool(SettingKeys.exactReminders, false);
+      await service.reschedule(now);
+      expect(notifications.scheduled, [...dailyIds, ...reviewIds]);
+      expect(notifications.exact.values, everyElement(isFalse));
     });
   });
 

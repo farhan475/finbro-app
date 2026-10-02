@@ -2,12 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:local_auth/local_auth.dart';
 
 import '../../../core/settings/app_settings_repository.dart';
 import '../../../core/utilities/app_logger.dart';
+import 'elapsed_clock.dart';
 import 'pin_hasher.dart';
 
 /// PIN problem the user can fix; show [message] as-is.
@@ -97,27 +99,27 @@ class AppLockService {
       Isolate.run(() => PinHasher.verify(pin, storedHash: hash, storedSalt: salt));
 
   /// Verifies [current] through the shared attempt limiter.
-  Future<void> requireCurrentPin(String current, DateTime now) async {
+  Future<void> requireCurrentPin(String current) async {
     final limiter = PinAttemptLimiter.instance;
-    final wait = limiter.remaining(now);
+    final wait = await limiter.remaining();
     if (wait != null) {
       throw PinException('Terlalu banyak percobaan. Coba lagi dalam ${wait.inSeconds + 1} detik.');
     }
     if (!await verifyPin(current)) {
-      limiter.recordFailure(now);
+      await limiter.recordFailure();
       throw const PinException('PIN saat ini salah.');
     }
-    limiter.reset();
+    await limiter.reset();
   }
 
-  Future<void> changePin({required String current, required String next, required DateTime now}) async {
-    await requireCurrentPin(current, now);
+  Future<void> changePin({required String current, required String next}) async {
+    await requireCurrentPin(current);
     await setPin(next);
   }
 
   /// Removes the PIN and biometric unlock after verifying [current].
-  Future<void> disable({required String current, required DateTime now}) async {
-    await requireCurrentPin(current, now);
+  Future<void> disable({required String current}) async {
+    await requireCurrentPin(current);
     await settings.remove(SettingKeys.pinHash);
     await settings.remove(SettingKeys.pinSalt);
     await settings.remove(SettingKeys.biometricEnabled);
@@ -159,8 +161,23 @@ class AppLockService {
 /// Wrong-PIN rate limit: every [maxAttempts] consecutive failures start a
 /// cooldown that grows with each lockout ([cooldowns], last one repeats).
 /// Process-wide so the lock screen and settings share it. When [bind]ed to
-/// the settings store the state survives killing the app. It uses the wall
-/// clock, so moving the device clock forward can still shorten a cooldown.
+/// the settings store the state survives killing the app.
+///
+/// A cooldown deadline is kept as (boot, deadline) on the device's
+/// elapsed-since-boot clock ([ElapsedClock]): changing the device clock has no
+/// effect and time asleep counts.
+///
+/// Reboot rule: the elapsed clock restarts at boot and how long the device was
+/// off is unknown, so a deadline from another boot is never assumed to have
+/// passed. The cooldown restarts in full from the first moment it is seen in
+/// the new boot: a reboot never shortens a cooldown (it can lengthen it by at
+/// most that cooldown). A cooldown seen to have ended is cleared, so a later
+/// reboot does not bring it back.
+///
+/// Stored as JSON under SettingKeys.pinLimiter: `failures`, and while a
+/// cooldown is set `boot`, `deadlineMs` and `cooldownMs`. Older versions
+/// stored `until` (wall-clock epoch ms); on load it becomes the remaining wall
+/// time, capped at the cooldown of that lockout, and is re-saved.
 class PinAttemptLimiter {
   PinAttemptLimiter({
     this.maxAttempts = 5,
@@ -171,81 +188,163 @@ class PinAttemptLimiter {
       Duration(minutes: 15),
       Duration(hours: 1),
     ],
+    this._clock = const SystemElapsedClock(),
+    this._wall = DateTime.now,
   });
 
   static final instance = PinAttemptLimiter();
 
   final int maxAttempts;
   final List<Duration> cooldowns;
+  final ElapsedClock _clock;
+  // Only for migrating the old wall-clock format.
+  final DateTime Function() _wall;
   int _failures = 0;
-  DateTime? _lockedUntil;
+  _Deadline? _deadline;
   AppSettingsRepository? _store;
+  Future<void> _loaded = Future.value();
+  Future<void> _saving = Future.value();
 
   int get failures => _failures;
 
+  /// Completes when every state change so far is saved.
+  @visibleForTesting
+  Future<void> get saved => _saving;
+
   /// Persists state in [store] and restores what an earlier process saved.
-  Future<void> bind(AppSettingsRepository store) async {
-    if (identical(_store, store)) return;
+  /// Other calls wait for the restore.
+  Future<void> bind(AppSettingsRepository store) {
+    if (identical(_store, store)) return _loaded;
     _store = store;
+    return _loaded = _loaded.then((_) => _restore(store));
+  }
+
+  Future<void> _restore(AppSettingsRepository store) async {
     try {
       final raw = await store.get(SettingKeys.pinLimiter);
       if (raw == null) return;
       final m = jsonDecode(raw) as Map<String, dynamic>;
       final failures = (m['failures'] as num?)?.toInt() ?? 0;
-      final until = (m['until'] as num?)?.toInt();
       if (failures > _failures) _failures = failures;
-      if (until != null) {
-        final t = DateTime.fromMillisecondsSinceEpoch(until);
-        if (_lockedUntil == null || t.isAfter(_lockedUntil!)) _lockedUntil = t;
+      final now = await _clock.now();
+      var save = false;
+      _Deadline? saved;
+      final (boot, deadlineMs, cooldownMs, until) = (m['boot'], m['deadlineMs'], m['cooldownMs'], m['until']);
+      if (boot is String && deadlineMs is num && cooldownMs is num) {
+        saved = (
+          boot: boot,
+          at: Duration(milliseconds: deadlineMs.toInt()),
+          length: Duration(milliseconds: cooldownMs.toInt()),
+        );
+      } else if (until is num) {
+        save = true;
+        final length = _cooldownFor(failures);
+        var left = DateTime.fromMillisecondsSinceEpoch(until.toInt()).difference(_wall());
+        if (left > length) left = length;
+        if (left > Duration.zero) saved = (boot: now.boot, at: now.elapsed + left, length: length);
       }
+      if (saved != null) {
+        // Keep whichever cooldown (saved or this process's) leaves longer.
+        final restored = _inBoot(saved, now);
+        final current = _deadline == null ? null : _inBoot(_deadline!, now);
+        _deadline = current == null || restored.at > current.at ? restored : current;
+        save = save || _deadline != saved;
+      }
+      if (save) _persist();
     } catch (e, s) {
       AppLogger.error('Status limiter PIN tidak terbaca', e, s);
     }
   }
 
   /// Remaining cooldown, or null when a new attempt is allowed.
-  Duration? remaining(DateTime now) {
-    final until = _lockedUntil;
-    if (until == null || !now.isBefore(until)) return null;
-    return until.difference(now);
+  Future<Duration?> remaining() async {
+    await _loaded;
+    if (_deadline == null) return null;
+    final now = await _clock.now();
+    final d = _deadline;
+    if (d == null) return null;
+    final current = _inBoot(d, now);
+    final left = current.at - now.elapsed;
+    if (left > Duration.zero) {
+      if (current != d) {
+        _deadline = current;
+        _persist();
+      }
+      return left;
+    }
+    // Seen ending: clear it so a later reboot cannot restart it.
+    _deadline = null;
+    _persist();
+    return null;
   }
 
   /// Attempts left before the next cooldown.
   int get attemptsLeft => maxAttempts - (_failures % maxAttempts);
 
-  void recordFailure(DateTime now) {
+  Future<void> recordFailure() async {
+    await _loaded;
+    final now = await _clock.now();
     _failures++;
     if (_failures % maxAttempts == 0) {
-      final level = _failures ~/ maxAttempts - 1;
-      _lockedUntil = now.add(cooldowns[level < cooldowns.length ? level : cooldowns.length - 1]);
+      final length = _cooldownFor(_failures);
+      _deadline = (boot: now.boot, at: now.elapsed + length, length: length);
     }
     _persist();
   }
 
-  void reset() {
-    if (_failures == 0 && _lockedUntil == null) return;
+  Future<void> reset() async {
+    await _loaded;
+    if (_failures == 0 && _deadline == null) return;
     _failures = 0;
-    _lockedUntil = null;
+    _deadline = null;
     _persist();
+  }
+
+  /// Cooldown of the lockout reached at [failures] consecutive failures.
+  Duration _cooldownFor(int failures) {
+    final level = failures ~/ maxAttempts - 1;
+    return cooldowns[level.clamp(0, cooldowns.length - 1)];
+  }
+
+  /// [d] expressed on [now]'s clock. A deadline from another boot, or one set
+  /// further ahead than its cooldown (impossible within one boot), restarts
+  /// the full cooldown from [now] (see the reboot rule above).
+  static _Deadline _inBoot(_Deadline d, ClockReading now) {
+    if (d.boot == now.boot && d.at - d.length <= now.elapsed) return d;
+    return (boot: now.boot, at: now.elapsed + d.length, length: d.length);
   }
 
   void _persist() {
     final store = _store;
-    if (store != null) unawaited(_write(store));
+    if (store == null) return;
+    // Snapshot now; writes run in order.
+    final d = _deadline;
+    final json = _failures == 0 && d == null
+        ? null
+        : jsonEncode({
+            'failures': _failures,
+            if (d != null) ...{
+              'boot': d.boot,
+              'deadlineMs': d.at.inMilliseconds,
+              'cooldownMs': d.length.inMilliseconds,
+            },
+          });
+    _saving = _saving.then((_) => _write(store, json));
   }
 
-  Future<void> _write(AppSettingsRepository store) async {
+  static Future<void> _write(AppSettingsRepository store, String? json) async {
     try {
-      if (_failures == 0 && _lockedUntil == null) {
+      if (json == null) {
         await store.remove(SettingKeys.pinLimiter);
       } else {
-        await store.set(
-          SettingKeys.pinLimiter,
-          jsonEncode({'failures': _failures, 'until': _lockedUntil?.millisecondsSinceEpoch}),
-        );
+        await store.set(SettingKeys.pinLimiter, json);
       }
     } catch (e, s) {
       AppLogger.error('Status limiter PIN gagal disimpan', e, s);
     }
   }
 }
+
+/// Cooldown end [at] on the elapsed clock of [boot]; [length] is the full
+/// cooldown, used to restart it after a reboot.
+typedef _Deadline = ({String boot, Duration at, Duration length});

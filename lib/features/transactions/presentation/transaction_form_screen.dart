@@ -29,12 +29,22 @@ import 'widgets/transaction_widgets.dart';
 /// income, expense or transfer. Field order follows 06-ux §11:
 /// Amount → Type → Category → Account → Date → Note → Attachment.
 class TransactionFormScreen extends ConsumerStatefulWidget {
-  const TransactionFormScreen({super.key, this.initialType, this.initialAccountId, this.transactionId});
+  const TransactionFormScreen({
+    super.key,
+    this.initialType,
+    this.initialAccountId,
+    this.initialTransferToAccountId,
+    this.transactionId,
+  });
 
   final TransactionType? initialType;
 
   /// Preselected account for new rows; defaults to the last used account.
   final String? initialAccountId;
+
+  /// Preselected transfer destination for new rows (`?to=`); the source
+  /// then defaults to another account.
+  final String? initialTransferToAccountId;
   final String? transactionId;
 
   bool get isEdit => transactionId != null;
@@ -96,8 +106,10 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
           _note.text = tx.note ?? '';
         }
       } else {
+        _toAccountId = widget.initialTransferToAccountId;
         _accountId =
             widget.initialAccountId ?? await ref.read(transactionQueryRepositoryProvider).lastUsedAccountId();
+        if (_accountId != null && _accountId == _toAccountId) _accountId = null;
       }
     } catch (e, s) {
       AppLogger.error('Gagal memuat form transaksi', e, s);
@@ -127,7 +139,7 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
 
   String? _resolvedAccount(List<Account> choices) {
     if (choices.any((a) => a.id == _accountId)) return _accountId;
-    return choices.firstOrNull?.id;
+    return choices.firstWhereOrNull((a) => a.id != _toAccountId)?.id ?? choices.firstOrNull?.id;
   }
 
   String? _resolvedDestination(List<Account> choices, String? source) {

@@ -1,15 +1,10 @@
 # FinBro — Bug & Stability Backlog
 
-Status per 2 Okt 2026 (setelah Fase 0–5). Semua item dari audit read-only 4 agen sudah dicek ulang terhadap kode dan ditutup, kecuali yang tercantum di "Masih terbuka".
-`flutter analyze`: bersih. `flutter test`: lihat `STATUS.md`.
+Status setelah penyelesaian pekerjaan codebase: lihat item aktif di bawah. `flutter analyze` dan `flutter test`: lihat `STATUS.md` setelah verifikasi.
 
-## Masih terbuka (kecil)
+## Masih terbuka
 
-- `RecurringRepository.create` menyisipkan rule di luar antrean `_serialized` engine. Tidak bisa memposting ganda (UNIQUE `(rule, due_date)` + close atomik), tapi sync yang sedang berjalan bisa melewatkan rule baru sampai sync berikutnya.
-- Transaksi bertanggal masa depan baru masuk saldo saat provider dihitung ulang (perubahan DB atau buka ulang app), bukan tepat saat jamnya lewat.
-- `FinanceService.metrics()` masih menghitung `summary`/`totalBalance` lebih dari sekali per panel Laporan (bukan jalur Home).
-- Relock: jika jam perangkat dimundurkan kira-kira sebesar lama perangkat tidur, cooldown/relock bisa terlewat. Penutupnya butuh `SystemClock.elapsedRealtime` via platform channel.
-- Restore: archive 4.3.0 mengabaikan verifikasi CRC zip. DB tetap dilindungi SHA-256 di manifest; lampiran belum punya checksum.
+- Lampiran belum punya checksum di manifest backup (DB dilindungi SHA-256; CRC32 per entry zip sudah diverifikasi saat restore sejak 2 Okt 2026).
 - Backup dan restore memuat seluruh zip ke memori, sehingga batasnya 512 MB (zip), 256 MB per file, 1 GB total. Backup di atas batas ditolak saat dibuat. Untuk pengguna dengan sangat banyak lampiran perlu backup streaming (lihat roadmap).
 
 ## Belum divalidasi di perangkat

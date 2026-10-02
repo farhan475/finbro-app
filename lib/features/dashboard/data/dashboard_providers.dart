@@ -105,13 +105,8 @@ final upcomingRecurringProvider = FutureProvider<List<UpcomingItem>>((ref) async
   return [for (final row in rows) UpcomingItem(row.readTable(i), row.readTable(r))];
 });
 
-/// Top active goals by priority (higher first), then oldest.
-final homeGoalsProvider = FutureProvider<List<Goal>>((ref) {
+/// Top active goals by priority (higher first), then oldest, with progress.
+final homeGoalsProvider = FutureProvider<List<GoalProgress>>((ref) {
   ref.watch(dbChangesProvider);
-  final db = ref.watch(databaseProvider);
-  return (db.select(db.goals)
-        ..where((g) => g.isActive.equals(true))
-        ..orderBy([(g) => OrderingTerm.desc(g.priority), (g) => OrderingTerm.asc(g.createdAt)])
-        ..limit(2))
-      .get();
+  return ref.watch(financeServiceProvider).goalProgresses(activeOnly: true, limit: 2);
 });

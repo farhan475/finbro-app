@@ -40,7 +40,7 @@ class _GoalsScreenState extends ConsumerState<GoalsScreen> {
     final fin = context.fin;
     final goals = ref.watch(goalsProvider);
     final now = ref.watch(clockProvider)();
-    bool reached(Goal g) => g.currentAmount >= g.targetAmount;
+    bool reached(GoalProgress p) => p.reached;
     return Scaffold(
       appBar: AppBar(
         title: Column(
@@ -67,21 +67,21 @@ class _GoalsScreenState extends ConsumerState<GoalsScreen> {
         value: goals,
         builder: (all) {
           final emergency = [
-            for (final g in all)
-              if (g.isActive && g.type == GoalType.emergency) g,
+            for (final p in all)
+              if (p.goal.isActive && p.goal.type == GoalType.emergency) p,
           ];
           final others = [
-            for (final g in all)
-              if (g.isActive && g.type != GoalType.emergency)
-                if (_filter == _GoalFilter.all || (_filter == _GoalFilter.active) != reached(g)) g,
+            for (final p in all)
+              if (p.goal.isActive && p.goal.type != GoalType.emergency)
+                if (_filter == _GoalFilter.all || (_filter == _GoalFilter.active) != reached(p)) p,
           ];
           final done = [
-            for (final g in all)
-              if (g.isActive && reached(g)) g,
+            for (final p in all)
+              if (p.goal.isActive && reached(p)) p,
           ];
           final archived = [
-            for (final g in all)
-              if (!g.isActive) g,
+            for (final p in all)
+              if (!p.goal.isActive) p,
           ];
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
@@ -106,7 +106,7 @@ class _GoalsScreenState extends ConsumerState<GoalsScreen> {
                     message: 'Tujuan yang mencapai 100% muncul di sini.',
                   )
                 else
-                  for (final g in done) ...[GoalCard(goal: g, now: now), const SizedBox(height: 8)],
+                  for (final g in done) ...[GoalCard(progress: g, now: now), const SizedBox(height: 8)],
               ] else ...[
                 _EmergencyCard(goals: emergency),
                 const SizedBox(height: 8),
@@ -118,7 +118,7 @@ class _GoalsScreenState extends ConsumerState<GoalsScreen> {
                     message: 'Contoh: laptop baru, liburan, atau dana pendidikan.',
                   )
                 else
-                  for (final g in others) ...[GoalCard(goal: g, now: now), const SizedBox(height: 8)],
+                  for (final g in others) ...[GoalCard(progress: g, now: now), const SizedBox(height: 8)],
               ],
               const SizedBox(height: 4),
               OutlinedButton.icon(
@@ -134,7 +134,7 @@ class _GoalsScreenState extends ConsumerState<GoalsScreen> {
                   collapsedShape: const Border(),
                   title: Text('Diarsipkan (${archived.length})', style: context.text.titleSmall),
                   children: [
-                    for (final g in archived) ...[GoalCard(goal: g, now: now), const SizedBox(height: 8)],
+                    for (final g in archived) ...[GoalCard(progress: g, now: now), const SizedBox(height: 8)],
                   ],
                 ),
             ],
@@ -150,8 +150,8 @@ class _GoalsScreenState extends ConsumerState<GoalsScreen> {
 class _EmergencyCard extends ConsumerWidget {
   const _EmergencyCard({required this.goals});
 
-  /// Active emergency-type goals (their sum is the Emergency Fund Balance).
-  final List<Goal> goals;
+  /// Active emergency-type goals (their progress sum is the Emergency Fund Balance).
+  final List<GoalProgress> goals;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -164,7 +164,7 @@ class _EmergencyCard extends ConsumerWidget {
         final progress = target > 0 ? goalProgress(s.balance, target) : null;
         final coverage = s.coverageMonths;
         return FinCard(
-          onTap: goals.length == 1 ? () => context.push(GoalPaths.goalDetail(goals.single.id)) : null,
+          onTap: goals.length == 1 ? () => context.push(GoalPaths.goalDetail(goals.single.goal.id)) : null,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -211,14 +211,14 @@ class _EmergencyCard extends ConsumerWidget {
                 const Divider(height: 24),
                 for (final g in goals)
                   InkWell(
-                    onTap: () => context.push(GoalPaths.goalDetail(g.id)),
+                    onTap: () => context.push(GoalPaths.goalDetail(g.goal.id)),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(vertical: 6),
                       child: Row(
                         children: [
-                          Expanded(child: Text(g.name, maxLines: 1, overflow: TextOverflow.ellipsis)),
+                          Expanded(child: Text(g.goal.name, maxLines: 1, overflow: TextOverflow.ellipsis)),
                           const SizedBox(width: 8),
-                          AmountText(g.currentAmount),
+                          AmountText(g.saved),
                           Icon(Icons.chevron_right, size: 18, color: fin.muted),
                         ],
                       ),

@@ -46,6 +46,12 @@ EN: First release of FinBro.
 - Deletion: uninstall removes all app data.
 - Privacy policy URL: host `docs/PRIVACY_POLICY.md` publicly (e.g. GitHub Pages) and paste URL.
 
+## Exact alarm declaration
+
+- The manifest declares `SCHEDULE_EXACT_ALARM` only (never `USE_EXACT_ALARM`, which Play reserves for alarm-clock/calendar apps). It is user-grantable and denied by default on Android 14+ for new installs.
+- Use: user-scheduled reminders (salary and other recurring transactions, daily check-in, "Ingatkan nanti", monthly review) fire at the time the user picked. Toggle: Pengaturan → Notifikasi → "Pengingat tepat waktu" (default on); the "Izinkan" button opens the system "Alarm & pengingat" screen.
+- Without the permission, or with the toggle off, reminders fall back to inexact alarms; no feature is blocked. If the App content → "Exact alarm" declaration form appears in Play Console, answer: core functionality = user-set reminders; the app works without the permission.
+
 ## Assets checklist
 
 - [ ] App icon 512x512 (`assets/brand/app_icon.png`, resize)

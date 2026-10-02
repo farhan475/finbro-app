@@ -122,6 +122,15 @@ class RecurringEngine {
     await _syncReminders(today);
   }
 
+  /// Inserts a new rule and synchronizes it behind any in-flight engine work.
+  /// Keeping the insert in the same queue prevents a concurrent sync from
+  /// missing the rule until the next app resume.
+  Future<void> createRule(String ruleId, RecurringRulesCompanion rule, DateTime now) =>
+      _serialized(() async {
+        await db.into(db.recurringRules).insert(rule);
+        await _sync(now);
+      });
+
   /// Saves a rule edit or (de)activation ([changes]), then regenerates: open
   /// instances outside the start/end dates or from today on that no longer
   /// match the schedule are removed, remaining open ones get the new amount,
@@ -379,8 +388,9 @@ class RecurringEngine {
   }
 
   /// Runs on every sync (app start/resume), so it diffs against the pending
-  /// requests and only (re)schedules reminders whose time or text changed:
-  /// each plugin call rewrites the plugin's whole stored schedule.
+  /// requests and only (re)schedules reminders whose time, text or delivery
+  /// mode changed: each plugin call rewrites the plugin's whole stored
+  /// schedule. A changed exact-alarm permission/setting reschedules each once.
   Future<void> _syncReminders(DateTime today) async {
     final pending = await _notifications.pendingPayloads();
     final q = db.select(db.recurringInstances).join([
@@ -391,6 +401,7 @@ class RecurringEngine {
         ? const <String, String>{}
         : {for (final a in await db.select(db.accounts).get()) a.id: a.name};
     final wanted = <int>{};
+    bool? exact;
     for (final row in rows) {
       final inst = row.readTable(db.recurringInstances);
       final rule = row.readTable(db.recurringRules);
@@ -400,15 +411,17 @@ class RecurringEngine {
       final at = reminderAt(rule, inst.dueDate);
       final title = rule.type == TransactionType.income ? 'Income terjadwal' : 'Expense terjadwal';
       final body = reminderBody(rule, inst.amount, accounts[rule.accountId] ?? '-');
-      // `at`/`text` only make the payload change whenever the reminder does.
+      exact ??= await exactRemindersActive(AppSettingsRepository(db), _notifications);
+      // `at`/`text`/`exact` only make the payload change whenever the reminder does.
       final payload = {
         'kind': NotificationKind.recurring,
         'instanceId': inst.id,
         'at': sqlDateTime(at),
         'text': '$title|$body',
+        'exact': exact,
       };
       if (pending[id] == jsonEncode(payload)) continue;
-      await _notifications.schedule(id: id, at: at, title: title, body: body, payload: payload);
+      await _notifications.schedule(id: id, at: at, title: title, body: body, payload: payload, exact: exact);
     }
     // Every other pending recurring reminder is obsolete: its instance was
     // closed, its rule changed, or the instance no longer exists (e.g. the

@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:drift/drift.dart' show DriftWrappedException;
+import 'package:drift/drift.dart' show DriftWrappedException, InvalidDataException;
 import 'package:drift/native.dart' show SqliteException;
 // Background-isolate DB (`createInBackground`) surfaces SQLite failures
 // wrapped in this type; unwrapping it is the only way to redact them.
@@ -36,13 +36,17 @@ abstract final class AppLogger {
   }
 
   /// `error.toString()`, except that SQLite failures drop the statement and
-  /// its bound parameters (amounts, notes, merchant names).
+  /// its bound parameters and drift data-validation failures drop the row
+  /// contents (amounts, notes, merchant names).
   @visibleForTesting
   static String describeError(Object error) => switch (error) {
     SqliteException(:final extendedResultCode, :final operation, :final message, :final explanation) =>
       'SqliteException($extendedResultCode): '
           '${operation == null ? '' : 'while $operation, '}$message'
           '${explanation == null ? '' : ', $explanation'}',
+    // The message embeds the rejected row's toString() (column values).
+    InvalidDataException(:final errors) =>
+      'InvalidDataException (${errors.length} kolom ditolak, isi data dihapus)',
     DriftRemoteException(:final remoteCause) => describeError(remoteCause),
     DriftWrappedException(:final cause?, :final message) => '${describeError(cause)} ($message)',
     _ => '$error',

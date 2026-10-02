@@ -34,7 +34,7 @@ class GoalFormScreen extends ConsumerWidget {
               appBar: AppBar(title: const Text('Edit tujuan')),
               body: const EmptyState(icon: Icons.flag_outlined, title: 'Tujuan tidak ditemukan'),
             )
-          : _GoalForm(initialType: g.type, existing: g),
+          : _GoalForm(initialType: g.goal.type, existing: g.goal),
     );
   }
 }
@@ -63,6 +63,7 @@ class _GoalFormState extends ConsumerState<_GoalForm> {
   late GoalType _type = widget.initialType;
   late DateTime? _targetDate = widget.existing?.targetDate;
   late int _priority = widget.existing?.priority ?? 0;
+  late String? _linkedAccountId = widget.existing?.linkedAccountId;
   EmergencyStatus? _emergency;
   bool _saving = false;
 
@@ -116,6 +117,7 @@ class _GoalFormState extends ConsumerState<_GoalForm> {
           targetDate: _targetDate,
           monthlyTarget: monthly,
           priority: _priority,
+          linkedAccountId: _linkedAccountId,
         );
         if (mounted) context.pop();
       } else {
@@ -126,6 +128,7 @@ class _GoalFormState extends ConsumerState<_GoalForm> {
           targetDate: _targetDate,
           monthlyTarget: monthly,
           priority: _priority,
+          linkedAccountId: _linkedAccountId,
         );
         if (mounted) context.pushReplacement(GoalPaths.goalDetail(id));
       }
@@ -213,11 +216,71 @@ class _GoalFormState extends ConsumerState<_GoalForm> {
               ],
               onChanged: (v) => setState(() => _priority = v ?? _priority),
             ),
+            const SizedBox(height: 12),
+            _LinkPicker(
+              goalId: widget.existing?.id,
+              value: _linkedAccountId,
+              onChanged: (v) => setState(() => _linkedAccountId = v),
+            ),
             const SizedBox(height: 24),
             FilledButton(onPressed: _saving ? null : _save, child: const Text('Simpan')),
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Optional Savings account whose balance becomes the goal's progress.
+class _LinkPicker extends ConsumerWidget {
+  const _LinkPicker({required this.goalId, required this.value, required this.onChanged});
+  final String? goalId;
+  final String? value;
+  final ValueChanged<String?> onChanged;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final muted = context.text.bodySmall!.copyWith(color: context.fin.muted);
+    return AsyncView(
+      value: ref.watch(linkableAccountsProvider(goalId)),
+      builder: (List<Account> accounts) {
+        final selected = accounts.any((a) => a.id == value) ? value : null;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            DropdownButtonFormField<String?>(
+              initialValue: selected,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Hubungkan ke account Savings (opsional)'),
+              items: [
+                const DropdownMenuItem<String?>(child: Text('Tidak dihubungkan')),
+                for (final a in accounts)
+                  DropdownMenuItem<String?>(
+                    value: a.id,
+                    child: Text(
+                      a.isActive ? a.name : '${a.name} (diarsipkan)',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              ],
+              onChanged: accounts.isEmpty ? null : onChanged,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              accounts.isEmpty
+                  ? 'Belum ada account Savings yang bisa dihubungkan. Satu account Savings hanya '
+                        'untuk satu tujuan.'
+                  : selected == null
+                  ? 'Jika dihubungkan, progress mengikuti saldo account tersebut sehingga dana tidak '
+                        'dicatat dua kali.'
+                  : 'Progress mengikuti saldo account ini; tambah dana dengan transfer ke account '
+                        'tersebut. Catatan Tambah/Tarik dana disimpan dan dipakai lagi jika hubungan diputus.',
+              style: muted,
+            ),
+          ],
+        );
+      },
     );
   }
 }

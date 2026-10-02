@@ -4,7 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../app/theme/app_theme.dart';
 import '../../../core/database/app_database.dart';
-import '../../../core/finance/finance_math.dart';
+import '../../../core/finance/finance_service.dart';
 import '../../../core/formatting/dates.dart';
 import '../../../core/formatting/money.dart';
 import '../../../core/ledger/ledger_service.dart';
@@ -12,21 +12,33 @@ import '../../../core/providers.dart';
 import '../../../shared/widgets/category_icon.dart';
 import '../../../shared/widgets/fin_widgets.dart';
 import '../data/goal_repository.dart';
+import '../../transactions/ledger_paths.dart';
 import '../goal_paths.dart';
 import 'goal_widgets.dart';
 
-enum _GoalMenu { edit, archive, restore, delete }
+enum _GoalMenu { edit, unlink, archive, restore, delete }
 
 /// Goal detail: progress, movement actions and history (FR-GOA-002/003).
 class GoalDetailScreen extends ConsumerWidget {
   const GoalDetailScreen({super.key, required this.goalId});
   final String goalId;
 
-  Future<void> _onMenu(BuildContext context, WidgetRef ref, Goal goal, _GoalMenu action) async {
+  Future<void> _onMenu(BuildContext context, WidgetRef ref, GoalProgress p, _GoalMenu action) async {
     final repo = ref.read(goalRepositoryProvider);
+    final goal = p.goal;
     switch (action) {
       case _GoalMenu.edit:
         await context.push(GoalPaths.editGoal(goal.id));
+      case _GoalMenu.unlink:
+        final ok = await confirmDialog(
+          context,
+          title: 'Putuskan dari account?',
+          message: 'Progress tujuan kembali dihitung dari catatan Tambah/Tarik dana '
+              '(saat ini ${formatRupiah(goal.currentAmount)}). Saldo account '
+              '${p.linkedAccount?.name ?? ''} tidak berubah.',
+          confirmLabel: 'Putuskan',
+        );
+        if (ok) await repo.unlink(goal.id);
       case _GoalMenu.archive:
         final ok = await confirmDialog(
           context,
@@ -68,8 +80,8 @@ class GoalDetailScreen extends ConsumerWidget {
         appBar: AppBar(),
         body: Padding(padding: const EdgeInsets.all(24), child: Text('Terjadi kesalahan: $e')),
       ),
-      data: (g) {
-        if (g == null) {
+      data: (p) {
+        if (p == null) {
           return Scaffold(
             appBar: AppBar(),
             body: const EmptyState(
@@ -79,14 +91,19 @@ class GoalDetailScreen extends ConsumerWidget {
             ),
           );
         }
+        final g = p.goal;
+        final linked = p.linkedAccount;
+        final muted = context.text.bodySmall!.copyWith(color: context.fin.muted);
         return Scaffold(
           appBar: AppBar(
             title: Text(g.name, maxLines: 1, overflow: TextOverflow.ellipsis),
             actions: [
               PopupMenuButton<_GoalMenu>(
-                onSelected: (a) => _onMenu(context, ref, g, a),
+                onSelected: (a) => _onMenu(context, ref, p, a),
                 itemBuilder: (_) => [
                   const PopupMenuItem(value: _GoalMenu.edit, child: Text('Edit')),
+                  if (linked != null)
+                    const PopupMenuItem(value: _GoalMenu.unlink, child: Text('Putuskan dari account')),
                   if (g.isActive)
                     const PopupMenuItem(value: _GoalMenu.archive, child: Text('Arsipkan'))
                   else
@@ -99,22 +116,36 @@ class GoalDetailScreen extends ConsumerWidget {
           body: ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
             children: [
-              _GoalHeader(goal: g, now: ref.watch(clockProvider)()),
+              _GoalHeader(progress: p, now: ref.watch(clockProvider)()),
               const SizedBox(height: 12),
-              if (g.isActive)
+              if (!g.isActive)
+                Text('Tujuan ini diarsipkan. Aktifkan kembali untuk mencatat dana.', style: muted)
+              else if (linked != null)
+                linked.isActive
+                    ? FilledButton.icon(
+                        onPressed: () => context.push(LedgerPaths.transferTo(linked.id)),
+                        icon: const Icon(Icons.swap_horiz),
+                        label: Text('Transfer ke ${linked.name}', maxLines: 1, overflow: TextOverflow.ellipsis),
+                      )
+                    : Text(
+                        'Account ${linked.name} diarsipkan: progress tetap mengikuti saldonya, '
+                        'tetapi transfer baru tidak bisa dicatat. Aktifkan account atau putuskan hubungan.',
+                        style: muted,
+                      )
+              else
                 Row(
                   children: [
                     Expanded(
                       child: FilledButton(
-                        onPressed: () => showMovementSheet(context, g, MovementType.contribution),
+                        onPressed: () => showMovementSheet(context, p, MovementType.contribution),
                         child: const Text('Tambah dana', maxLines: 1),
                       ),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: OutlinedButton(
-                        onPressed: g.currentAmount > 0
-                            ? () => showMovementSheet(context, g, MovementType.withdrawal)
+                        onPressed: p.saved > 0
+                            ? () => showMovementSheet(context, p, MovementType.withdrawal)
                             : null,
                         child: const Text('Tarik dana', maxLines: 1),
                       ),
@@ -122,19 +153,23 @@ class GoalDetailScreen extends ConsumerWidget {
                     const SizedBox(width: 8),
                     Expanded(
                       child: OutlinedButton(
-                        onPressed: () => showMovementSheet(context, g, MovementType.adjustment),
+                        onPressed: () => showMovementSheet(context, p, MovementType.adjustment),
                         child: const FittedBox(child: Text('Penyesuaian')),
                       ),
                     ),
                   ],
-                )
-              else
-                Text(
-                  'Tujuan ini diarsipkan. Aktifkan kembali untuk mencatat dana.',
-                  style: context.text.bodySmall!.copyWith(color: context.fin.muted),
                 ),
               const SizedBox(height: 16),
               const SectionHeader('Riwayat'),
+              if (linked != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    'Catatan Tambah/Tarik dana tidak dipakai selama tujuan terhubung ke account; '
+                    'dipakai lagi jika hubungan diputus.',
+                    style: muted,
+                  ),
+                ),
               _MovementHistory(goalId: g.id),
             ],
           ),
@@ -145,16 +180,18 @@ class GoalDetailScreen extends ConsumerWidget {
 }
 
 class _GoalHeader extends StatelessWidget {
-  const _GoalHeader({required this.goal, required this.now});
-  final Goal goal;
+  const _GoalHeader({required this.progress, required this.now});
+  final GoalProgress progress;
   final DateTime now;
 
   @override
   Widget build(BuildContext context) {
     final fin = context.fin;
     final muted = context.text.bodySmall!.copyWith(color: fin.muted);
-    final progress = goalProgress(goal.currentAmount, goal.targetAmount);
-    final schedule = goalScheduleText(goal, now);
+    final goal = progress.goal;
+    final linked = progress.linkedAccount;
+    final percent = progress.percent;
+    final schedule = goalScheduleText(progress, now);
     return FinCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -177,29 +214,50 @@ class _GoalHeader extends StatelessWidget {
           FittedBox(
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerLeft,
-            child: AmountText(goal.currentAmount, style: context.text.headlineSmall),
+            child: AmountText(progress.saved, style: context.text.headlineSmall),
           ),
           Text('dari target ${formatRupiah(goal.targetAmount)}', style: muted),
           const SizedBox(height: 12),
           Row(
             children: [
-              Expanded(child: FinProgressBar(percent: progress)),
+              Expanded(child: FinProgressBar(percent: percent)),
               const SizedBox(width: 12),
-              Text(formatPercent(progress), style: context.text.titleSmall),
+              Text(formatPercent(percent), style: context.text.titleSmall),
             ],
           ),
           const SizedBox(height: 8),
           Text(
-            goal.currentAmount >= goal.targetAmount
-                ? 'Target tercapai'
-                : 'Kurang ${formatRupiah(goal.targetAmount - goal.currentAmount)}',
+            progress.reached ? 'Target tercapai' : 'Kurang ${formatRupiah(progress.remaining)}',
             style: context.text.bodySmall,
           ),
           if (schedule != null) Text(schedule, style: muted),
           if (goal.monthlyTarget != null)
             Text('Target kontribusi ${formatRupiah(goal.monthlyTarget!)}/bulan', style: muted),
           const SizedBox(height: 8),
-          Text('Dana tetap berada di account Anda; FinBro mencatat alokasinya.', style: muted),
+          if (linked == null)
+            Text('Dana tetap berada di account Anda; FinBro mencatat alokasinya.', style: muted)
+          else ...[
+            Row(
+              children: [
+                Icon(Icons.link, size: 16, color: fin.muted),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Terhubung ke ${linked.name}${linked.isActive ? '' : ' (diarsipkan)'}',
+                    style: context.text.bodyMedium,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'Progress = saldo account ini. Tambah dana dengan transfer ke ${linked.name}; '
+              'tidak perlu dicatat lagi di tujuan.',
+              style: muted,
+            ),
+          ],
         ],
       ),
     );
@@ -277,7 +335,7 @@ class _MovementHistory extends ConsumerWidget {
 }
 
 /// Bottom sheet to record a contribution, withdrawal or adjustment.
-Future<void> showMovementSheet(BuildContext context, Goal goal, MovementType type) =>
+Future<void> showMovementSheet(BuildContext context, GoalProgress goal, MovementType type) =>
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -287,7 +345,7 @@ Future<void> showMovementSheet(BuildContext context, Goal goal, MovementType typ
 
 class _MovementSheet extends ConsumerStatefulWidget {
   const _MovementSheet({required this.goal, required this.type});
-  final Goal goal;
+  final GoalProgress goal;
   final MovementType type;
 
   @override
@@ -331,7 +389,7 @@ class _MovementSheetState extends ConsumerState<_MovementSheet> {
     final at = isSameDay(_date, now) ? now : DateTime(_date.year, _date.month, _date.day, 12);
     try {
       await ref.read(goalRepositoryProvider).addMovement(
-        goalId: widget.goal.id,
+        goalId: widget.goal.goal.id,
         type: widget.type,
         amount: parseRupiah(_amount.text)!,
         decrease: _decrease,
@@ -361,7 +419,7 @@ class _MovementSheetState extends ConsumerState<_MovementSheet> {
           children: [
             Text(widget.type.label, style: context.text.titleMedium),
             Text(
-              '${widget.goal.name} · saldo ${formatRupiah(widget.goal.currentAmount)}',
+              '${widget.goal.goal.name} · saldo ${formatRupiah(widget.goal.saved)}',
               style: muted,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,

@@ -3316,6 +3316,20 @@ class $GoalsTable extends Goals with TableInfo<$GoalsTable, Goal> {
     ),
     defaultValue: const Constant(true),
   );
+  static const VerificationMeta _linkedAccountIdMeta = const VerificationMeta(
+    'linkedAccountId',
+  );
+  @override
+  late final GeneratedColumn<String> linkedAccountId = GeneratedColumn<String>(
+    'linked_account_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES accounts (id) ON DELETE SET NULL',
+    ),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     createdAt,
@@ -3329,6 +3343,7 @@ class $GoalsTable extends Goals with TableInfo<$GoalsTable, Goal> {
     monthlyTarget,
     priority,
     isActive,
+    linkedAccountId,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -3396,6 +3411,15 @@ class $GoalsTable extends Goals with TableInfo<$GoalsTable, Goal> {
         isActive.isAcceptableOrUnknown(data['is_active']!, _isActiveMeta),
       );
     }
+    if (data.containsKey('linked_account_id')) {
+      context.handle(
+        _linkedAccountIdMeta,
+        linkedAccountId.isAcceptableOrUnknown(
+          data['linked_account_id']!,
+          _linkedAccountIdMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -3457,6 +3481,10 @@ class $GoalsTable extends Goals with TableInfo<$GoalsTable, Goal> {
         DriftSqlType.bool,
         data['${effectivePrefix}is_active'],
       )!,
+      linkedAccountId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}linked_account_id'],
+      ),
     );
   }
 
@@ -3486,12 +3514,16 @@ class Goal extends DataClass implements Insertable<Goal> {
   final GoalType type;
   final int targetAmount;
 
-  /// Cache of SUM(goal_movements.amount); rebuilt by GoalRepository.
+  /// Cache of SUM(goal_movements.amount); rebuilt by GoalRepository. Progress
+  /// of an unlinked goal only (see FinanceService.goalProgresses).
   final int currentAmount;
   final DateTime? targetDate;
   final int? monthlyTarget;
   final int priority;
   final bool isActive;
+
+  /// Savings account whose calculated balance is this goal's progress (v3).
+  final String? linkedAccountId;
   const Goal({
     required this.createdAt,
     required this.updatedAt,
@@ -3504,6 +3536,7 @@ class Goal extends DataClass implements Insertable<Goal> {
     this.monthlyTarget,
     required this.priority,
     required this.isActive,
+    this.linkedAccountId,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -3535,6 +3568,9 @@ class Goal extends DataClass implements Insertable<Goal> {
     }
     map['priority'] = Variable<int>(priority);
     map['is_active'] = Variable<bool>(isActive);
+    if (!nullToAbsent || linkedAccountId != null) {
+      map['linked_account_id'] = Variable<String>(linkedAccountId);
+    }
     return map;
   }
 
@@ -3555,6 +3591,9 @@ class Goal extends DataClass implements Insertable<Goal> {
           : Value(monthlyTarget),
       priority: Value(priority),
       isActive: Value(isActive),
+      linkedAccountId: linkedAccountId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(linkedAccountId),
     );
   }
 
@@ -3575,6 +3614,7 @@ class Goal extends DataClass implements Insertable<Goal> {
       monthlyTarget: serializer.fromJson<int?>(json['monthlyTarget']),
       priority: serializer.fromJson<int>(json['priority']),
       isActive: serializer.fromJson<bool>(json['isActive']),
+      linkedAccountId: serializer.fromJson<String?>(json['linkedAccountId']),
     );
   }
   @override
@@ -3592,6 +3632,7 @@ class Goal extends DataClass implements Insertable<Goal> {
       'monthlyTarget': serializer.toJson<int?>(monthlyTarget),
       'priority': serializer.toJson<int>(priority),
       'isActive': serializer.toJson<bool>(isActive),
+      'linkedAccountId': serializer.toJson<String?>(linkedAccountId),
     };
   }
 
@@ -3607,6 +3648,7 @@ class Goal extends DataClass implements Insertable<Goal> {
     Value<int?> monthlyTarget = const Value.absent(),
     int? priority,
     bool? isActive,
+    Value<String?> linkedAccountId = const Value.absent(),
   }) => Goal(
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
@@ -3621,6 +3663,9 @@ class Goal extends DataClass implements Insertable<Goal> {
         : this.monthlyTarget,
     priority: priority ?? this.priority,
     isActive: isActive ?? this.isActive,
+    linkedAccountId: linkedAccountId.present
+        ? linkedAccountId.value
+        : this.linkedAccountId,
   );
   Goal copyWithCompanion(GoalsCompanion data) {
     return Goal(
@@ -3643,6 +3688,9 @@ class Goal extends DataClass implements Insertable<Goal> {
           : this.monthlyTarget,
       priority: data.priority.present ? data.priority.value : this.priority,
       isActive: data.isActive.present ? data.isActive.value : this.isActive,
+      linkedAccountId: data.linkedAccountId.present
+          ? data.linkedAccountId.value
+          : this.linkedAccountId,
     );
   }
 
@@ -3659,7 +3707,8 @@ class Goal extends DataClass implements Insertable<Goal> {
           ..write('targetDate: $targetDate, ')
           ..write('monthlyTarget: $monthlyTarget, ')
           ..write('priority: $priority, ')
-          ..write('isActive: $isActive')
+          ..write('isActive: $isActive, ')
+          ..write('linkedAccountId: $linkedAccountId')
           ..write(')'))
         .toString();
   }
@@ -3677,6 +3726,7 @@ class Goal extends DataClass implements Insertable<Goal> {
     monthlyTarget,
     priority,
     isActive,
+    linkedAccountId,
   );
   @override
   bool operator ==(Object other) =>
@@ -3692,7 +3742,8 @@ class Goal extends DataClass implements Insertable<Goal> {
           other.targetDate == this.targetDate &&
           other.monthlyTarget == this.monthlyTarget &&
           other.priority == this.priority &&
-          other.isActive == this.isActive);
+          other.isActive == this.isActive &&
+          other.linkedAccountId == this.linkedAccountId);
 }
 
 class GoalsCompanion extends UpdateCompanion<Goal> {
@@ -3707,6 +3758,7 @@ class GoalsCompanion extends UpdateCompanion<Goal> {
   final Value<int?> monthlyTarget;
   final Value<int> priority;
   final Value<bool> isActive;
+  final Value<String?> linkedAccountId;
   final Value<int> rowid;
   const GoalsCompanion({
     this.createdAt = const Value.absent(),
@@ -3720,6 +3772,7 @@ class GoalsCompanion extends UpdateCompanion<Goal> {
     this.monthlyTarget = const Value.absent(),
     this.priority = const Value.absent(),
     this.isActive = const Value.absent(),
+    this.linkedAccountId = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   GoalsCompanion.insert({
@@ -3734,6 +3787,7 @@ class GoalsCompanion extends UpdateCompanion<Goal> {
     this.monthlyTarget = const Value.absent(),
     this.priority = const Value.absent(),
     this.isActive = const Value.absent(),
+    this.linkedAccountId = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : createdAt = Value(createdAt),
        updatedAt = Value(updatedAt),
@@ -3753,6 +3807,7 @@ class GoalsCompanion extends UpdateCompanion<Goal> {
     Expression<int>? monthlyTarget,
     Expression<int>? priority,
     Expression<bool>? isActive,
+    Expression<String>? linkedAccountId,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -3767,6 +3822,7 @@ class GoalsCompanion extends UpdateCompanion<Goal> {
       if (monthlyTarget != null) 'monthly_target': monthlyTarget,
       if (priority != null) 'priority': priority,
       if (isActive != null) 'is_active': isActive,
+      if (linkedAccountId != null) 'linked_account_id': linkedAccountId,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -3783,6 +3839,7 @@ class GoalsCompanion extends UpdateCompanion<Goal> {
     Value<int?>? monthlyTarget,
     Value<int>? priority,
     Value<bool>? isActive,
+    Value<String?>? linkedAccountId,
     Value<int>? rowid,
   }) {
     return GoalsCompanion(
@@ -3797,6 +3854,7 @@ class GoalsCompanion extends UpdateCompanion<Goal> {
       monthlyTarget: monthlyTarget ?? this.monthlyTarget,
       priority: priority ?? this.priority,
       isActive: isActive ?? this.isActive,
+      linkedAccountId: linkedAccountId ?? this.linkedAccountId,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -3845,6 +3903,9 @@ class GoalsCompanion extends UpdateCompanion<Goal> {
     if (isActive.present) {
       map['is_active'] = Variable<bool>(isActive.value);
     }
+    if (linkedAccountId.present) {
+      map['linked_account_id'] = Variable<String>(linkedAccountId.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -3865,6 +3926,7 @@ class GoalsCompanion extends UpdateCompanion<Goal> {
           ..write('monthlyTarget: $monthlyTarget, ')
           ..write('priority: $priority, ')
           ..write('isActive: $isActive, ')
+          ..write('linkedAccountId: $linkedAccountId, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -8280,6 +8342,10 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     'attachments_image_hash',
     'CREATE INDEX attachments_image_hash ON attachments (image_hash)',
   );
+  late final Index goalsLinkedAccountId = Index(
+    'goals_linked_account_id',
+    'CREATE UNIQUE INDEX goals_linked_account_id ON goals (linked_account_id) WHERE linked_account_id IS NOT NULL',
+  );
   late final Index goalMovementsGoalId = Index(
     'goal_movements_goal_id',
     'CREATE INDEX goal_movements_goal_id ON goal_movements (goal_id)',
@@ -8322,6 +8388,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     transactionsRecurringInstanceId,
     attachmentsTransactionId,
     attachmentsImageHash,
+    goalsLinkedAccountId,
     goalMovementsGoalId,
     goalMovementsTransactionId,
     recurringInstancesDueDateStatus,
@@ -8335,6 +8402,13 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         limitUpdateKind: UpdateKind.delete,
       ),
       result: [TableUpdate('attachments', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'accounts',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('goals', kind: UpdateKind.update)],
     ),
     WritePropagation(
       on: TableUpdateQuery.onTableName(
@@ -8438,6 +8512,24 @@ final class $$AccountsTableReferences
         );
 
     final cache = $_typedResult.readTableOrNull(_incomingTransfersTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$GoalsTable, List<Goal>> _goalsRefsTable(
+    _$AppDatabase db,
+  ) => MultiTypedResultKey.fromTable(
+    db.goals,
+    aliasName: 'accounts__id__goals__linked_account_id',
+  );
+
+  $$GoalsTableProcessedTableManager get goalsRefs {
+    final manager = $$GoalsTableTableManager($_db, $_db.goals).filter(
+      (f) => f.linkedAccountId.id.sqlEquals($_itemColumn<String>('id')!),
+    );
+
+    final cache = $_typedResult.readTableOrNull(_goalsRefsTable($_db));
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: cache),
     );
@@ -8560,6 +8652,31 @@ class $$AccountsTableFilterComposer
           }) => $$TransactionsTableFilterComposer(
             $db: $db,
             $table: $db.transactions,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> goalsRefs(
+    Expression<bool> Function($$GoalsTableFilterComposer f) f,
+  ) {
+    final $$GoalsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.goals,
+      getReferencedColumn: (t) => t.linkedAccountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$GoalsTableFilterComposer(
+            $db: $db,
+            $table: $db.goals,
             $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
             joinBuilder: joinBuilder,
             $removeJoinBuilderFromRootComposer:
@@ -8738,6 +8855,31 @@ class $$AccountsTableAnnotationComposer
     return f(composer);
   }
 
+  Expression<T> goalsRefs<T extends Object>(
+    Expression<T> Function($$GoalsTableAnnotationComposer a) f,
+  ) {
+    final $$GoalsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.goals,
+      getReferencedColumn: (t) => t.linkedAccountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$GoalsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.goals,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
   Expression<T> recurringRulesRefs<T extends Object>(
     Expression<T> Function($$RecurringRulesTableAnnotationComposer a) f,
   ) {
@@ -8780,6 +8922,7 @@ class $$AccountsTableTableManager
           PrefetchHooks Function({
             bool ledgerTransactions,
             bool incomingTransfers,
+            bool goalsRefs,
             bool recurringRulesRefs,
           })
         > {
@@ -8854,6 +8997,7 @@ class $$AccountsTableTableManager
               ({
                 ledgerTransactions = false,
                 incomingTransfers = false,
+                goalsRefs = false,
                 recurringRulesRefs = false,
               }) {
                 return PrefetchHooks(
@@ -8861,6 +9005,7 @@ class $$AccountsTableTableManager
                   explicitlyWatchedTables: [
                     if (ledgerTransactions) db.transactions,
                     if (incomingTransfers) db.transactions,
+                    if (goalsRefs) db.goals,
                     if (recurringRulesRefs) db.recurringRules,
                   ],
                   addJoins: null,
@@ -8908,6 +9053,27 @@ class $$AccountsTableTableManager
                               ),
                           typedResults: items,
                         ),
+                      if (goalsRefs)
+                        await $_getPrefetchedData<
+                          Account,
+                          $AccountsTable,
+                          Goal
+                        >(
+                          currentTable: table,
+                          referencedTable: $$AccountsTableReferences
+                              ._goalsRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$AccountsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).goalsRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.linkedAccountId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
                       if (recurringRulesRefs)
                         await $_getPrefetchedData<
                           Account,
@@ -8952,6 +9118,7 @@ typedef $$AccountsTableProcessedTableManager =
       PrefetchHooks Function({
         bool ledgerTransactions,
         bool incomingTransfers,
+        bool goalsRefs,
         bool recurringRulesRefs,
       })
     >;
@@ -11434,6 +11601,7 @@ typedef $$GoalsTableCreateCompanionBuilder = GoalsCompanion Function({
   Value<int?> monthlyTarget,
   Value<int> priority,
   Value<bool> isActive,
+  Value<String?> linkedAccountId,
   Value<int> rowid,
 });
 typedef $$GoalsTableUpdateCompanionBuilder = GoalsCompanion Function({
@@ -11448,12 +11616,30 @@ typedef $$GoalsTableUpdateCompanionBuilder = GoalsCompanion Function({
   Value<int?> monthlyTarget,
   Value<int> priority,
   Value<bool> isActive,
+  Value<String?> linkedAccountId,
   Value<int> rowid,
 });
 
 final class $$GoalsTableReferences
     extends BaseReferences<_$AppDatabase, $GoalsTable, Goal> {
   $$GoalsTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $AccountsTable _linkedAccountIdTable(_$AppDatabase db) =>
+      db.accounts.createAlias('goals__linked_account_id__accounts__id');
+
+  $$AccountsTableProcessedTableManager? get linkedAccountId {
+    final $_column = $_itemColumn<String>('linked_account_id');
+    if ($_column == null) return null;
+    final manager = $$AccountsTableTableManager(
+      $_db,
+      $_db.accounts,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_linkedAccountIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
 
   static MultiTypedResultKey<$GoalMovementsTable, List<GoalMovement>>
   _goalMovementsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
@@ -11540,6 +11726,29 @@ class $$GoalsTableFilterComposer extends Composer<_$AppDatabase, $GoalsTable> {
     column: $table.isActive,
     builder: (column) => ColumnFilters(column),
   );
+
+  $$AccountsTableFilterComposer get linkedAccountId {
+    final $$AccountsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.linkedAccountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableFilterComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
 
   Expression<bool> goalMovementsRefs(
     Expression<bool> Function($$GoalMovementsTableFilterComposer f) f,
@@ -11630,6 +11839,29 @@ class $$GoalsTableOrderingComposer
     column: $table.isActive,
     builder: (column) => ColumnOrderings(column),
   );
+
+  $$AccountsTableOrderingComposer get linkedAccountId {
+    final $$AccountsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.linkedAccountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableOrderingComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
 }
 
 class $$GoalsTableAnnotationComposer
@@ -11683,6 +11915,29 @@ class $$GoalsTableAnnotationComposer
   GeneratedColumn<bool> get isActive =>
       $composableBuilder(column: $table.isActive, builder: (column) => column);
 
+  $$AccountsTableAnnotationComposer get linkedAccountId {
+    final $$AccountsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.linkedAccountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+
   Expression<T> goalMovementsRefs<T extends Object>(
     Expression<T> Function($$GoalMovementsTableAnnotationComposer a) f,
   ) {
@@ -11722,7 +11977,7 @@ class $$GoalsTableTableManager
           $$GoalsTableUpdateCompanionBuilder,
           (Goal, $$GoalsTableReferences),
           Goal,
-          PrefetchHooks Function({bool goalMovementsRefs})
+          PrefetchHooks Function({bool linkedAccountId, bool goalMovementsRefs})
         > {
   $$GoalsTableTableManager(_$AppDatabase db, $GoalsTable table)
     : super(
@@ -11748,6 +12003,7 @@ class $$GoalsTableTableManager
                 Value<int?> monthlyTarget = const Value.absent(),
                 Value<int> priority = const Value.absent(),
                 Value<bool> isActive = const Value.absent(),
+                Value<String?> linkedAccountId = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => GoalsCompanion(
                 createdAt: createdAt,
@@ -11761,6 +12017,7 @@ class $$GoalsTableTableManager
                 monthlyTarget: monthlyTarget,
                 priority: priority,
                 isActive: isActive,
+                linkedAccountId: linkedAccountId,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -11776,6 +12033,7 @@ class $$GoalsTableTableManager
                 Value<int?> monthlyTarget = const Value.absent(),
                 Value<int> priority = const Value.absent(),
                 Value<bool> isActive = const Value.absent(),
+                Value<String?> linkedAccountId = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => GoalsCompanion.insert(
                 createdAt: createdAt,
@@ -11789,6 +12047,7 @@ class $$GoalsTableTableManager
                 monthlyTarget: monthlyTarget,
                 priority: priority,
                 isActive: isActive,
+                linkedAccountId: linkedAccountId,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -11799,33 +12058,70 @@ class $$GoalsTableTableManager
                 ),
               )
               .toList(),
-          prefetchHooksCallback: ({goalMovementsRefs = false}) {
-            return PrefetchHooks(
-              db: db,
-              explicitlyWatchedTables: [
-                if (goalMovementsRefs) db.goalMovements,
-              ],
-              addJoins: null,
-              getPrefetchedDataCallback: (items) async {
-                return [
-                  if (goalMovementsRefs)
-                    await $_getPrefetchedData<Goal, $GoalsTable, GoalMovement>(
-                      currentTable: table,
-                      referencedTable: $$GoalsTableReferences
-                          ._goalMovementsRefsTable(db),
-                      managerFromTypedResult: (p0) => $$GoalsTableReferences(
-                        db,
-                        table,
-                        p0,
-                      ).goalMovementsRefs,
-                      referencedItemsForCurrentItem: (item, referencedItems) =>
-                          referencedItems.where((e) => e.goalId == item.id),
-                      typedResults: items,
-                    ),
-                ];
+          prefetchHooksCallback:
+              ({linkedAccountId = false, goalMovementsRefs = false}) {
+                return PrefetchHooks(
+                  db: db,
+                  explicitlyWatchedTables: [
+                    if (goalMovementsRefs) db.goalMovements,
+                  ],
+                  addJoins:
+                      <
+                        T extends TableManagerState<
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic
+                        >
+                      >(state) {
+                        if (linkedAccountId) {
+                          state = state.withJoin(
+                            currentTable: table,
+                            currentColumn: table.linkedAccountId,
+                            referencedTable: $$GoalsTableReferences
+                                ._linkedAccountIdTable(db),
+                            referencedColumn: $$GoalsTableReferences
+                                ._linkedAccountIdTable(db)
+                                .id,
+                          ) as T;
+                        }
+
+                        return state;
+                      },
+                  getPrefetchedDataCallback: (items) async {
+                    return [
+                      if (goalMovementsRefs)
+                        await $_getPrefetchedData<
+                          Goal,
+                          $GoalsTable,
+                          GoalMovement
+                        >(
+                          currentTable: table,
+                          referencedTable: $$GoalsTableReferences
+                              ._goalMovementsRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$GoalsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).goalMovementsRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.goalId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                    ];
+                  },
+                );
               },
-            );
-          },
         ),
       );
 }
@@ -11842,7 +12138,7 @@ typedef $$GoalsTableProcessedTableManager =
       $$GoalsTableUpdateCompanionBuilder,
       (Goal, $$GoalsTableReferences),
       Goal,
-      PrefetchHooks Function({bool goalMovementsRefs})
+      PrefetchHooks Function({bool linkedAccountId, bool goalMovementsRefs})
     >;
 typedef $$GoalMovementsTableCreateCompanionBuilder =
     GoalMovementsCompanion Function({

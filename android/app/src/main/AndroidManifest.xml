@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- Exact reminders ("Pengingat tepat waktu"): user-grantable, denied by default on
+         Android 14+; FinBro falls back to inexact alarms. Never USE_EXACT_ALARM (Play policy). -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
     <application
@@ -38,7 +41,9 @@
         </activity>
         <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver" />
         <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
-        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
+        <!-- Wraps the plugin's ScheduledNotificationBootReceiver: downgrades stored exact
+             reminders to inexact when exact alarms are no longer allowed. -->
+        <receiver android:exported="false" android:name=".ReminderBootReceiver">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED"/>
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>

@@ -4,6 +4,7 @@ import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterFragmentActivity
+import io.flutter.embedding.engine.FlutterEngine
 
 // FlutterFragmentActivity is required by local_auth (biometric prompt).
 class MainActivity : FlutterFragmentActivity() {
@@ -13,5 +14,10 @@ class MainActivity : FlutterFragmentActivity() {
         // Recents thumbnail, whether or not the PIN lock is enabled.
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(false)
+    }
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        ClockChannel.register(flutterEngine.dartExecutor.binaryMessenger, this)
     }
 }

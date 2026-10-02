@@ -255,12 +255,12 @@ ThemeData buildTheme(Brightness brightness) {
       showCheckmark: false,
     ),
     navigationBarTheme: NavigationBarThemeData(
-      // The floating glass container in AppShell paints the background.
       backgroundColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
-      indicatorColor: c.accentSoft,
+      indicatorColor: c.accentSoft.withValues(alpha: 0.72),
+      indicatorShape: const StadiumBorder(),
       elevation: 0,
-      height: 64,
+      height: 68,
       labelTextStyle: WidgetStateProperty.resolveWith(
         (s) => textTheme.labelSmall!.copyWith(
           color: s.contains(WidgetState.selected) ? c.accentText : c.muted,

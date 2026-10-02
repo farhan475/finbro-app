@@ -5,7 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/routes.dart';
 import '../../../app/theme/app_theme.dart';
 import '../../../core/database/app_database.dart';
-import '../../../core/finance/finance_math.dart';
+import '../../../core/finance/finance_service.dart';
 import '../../../core/formatting/dates.dart';
 import '../../../core/formatting/money.dart';
 import '../../../core/providers.dart';
@@ -211,18 +211,19 @@ class GoalsCard extends ConsumerWidget {
 
 class _GoalRow extends StatelessWidget {
   const _GoalRow({required this.goal});
-  final Goal goal;
+  final GoalProgress goal;
 
   @override
   Widget build(BuildContext context) {
-    final progress = goalProgress(goal.currentAmount, goal.targetAmount);
+    final g = goal.goal;
+    final progress = goal.percent;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
             Expanded(
-              child: Text(goal.name, style: context.text.titleSmall, maxLines: 1, overflow: TextOverflow.ellipsis),
+              child: Text(g.name, style: context.text.titleSmall, maxLines: 1, overflow: TextOverflow.ellipsis),
             ),
             const SizedBox(width: 8),
             Text(formatPercent(progress), style: context.text.labelLarge),
@@ -230,7 +231,7 @@ class _GoalRow extends StatelessWidget {
         ),
         const SizedBox(height: 2),
         Text(
-          '${goal.type.label} · ${formatRupiah(goal.currentAmount)} / ${formatRupiah(goal.targetAmount)}',
+          '${g.type.label} · ${formatRupiah(goal.saved)} / ${formatRupiah(g.targetAmount)}',
           style: context.text.bodySmall,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,

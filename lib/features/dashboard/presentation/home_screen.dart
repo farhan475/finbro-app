@@ -48,7 +48,8 @@ class HomeScreen extends ConsumerWidget {
     final name = ref.watch(userNameProvider);
 
     return Scaffold(
-      floatingActionButton: AboveNavBar(
+      floatingActionButton: Transform.translate(
+        offset: const Offset(0, -58),
         child: FloatingActionButton(
           heroTag: 'home-fab',
           tooltip: 'Tambah transaksi',

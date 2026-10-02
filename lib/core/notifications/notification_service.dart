@@ -13,6 +13,7 @@ import 'package:timezone/data/latest_all.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 
 import '../database/app_database.dart';
+import '../settings/app_settings_repository.dart';
 import '../utilities/app_logger.dart';
 
 /// Payload kinds carried by notifications (JSON `{"kind": ..., ...}`).
@@ -36,6 +37,9 @@ class NotificationEvent {
   final String kind;
   final Map<String, dynamic> data;
   final String? actionId;
+
+  /// Whether the notification was scheduled as an exact alarm (`exact` key).
+  bool get exact => data['exact'] == true;
 
   static NotificationEvent? fromResponse(NotificationResponse r) {
     final p = r.payload;
@@ -105,13 +109,30 @@ const dailyCheckTitle = 'Daily check-in';
 const dailyCheckBody =
     'Belum ada transaksi yang tercatat hari ini. Apakah memang tidak ada aktivitas keuangan?';
 
-/// Payload of the daily check for [day] at [hour]:[minute]. The time is part
-/// of the payload so a pending request identifies its schedule exactly.
-Map<String, dynamic> dailyCheckPayload(DateTime day, {required int hour, required int minute}) => {
+/// Payload of the daily check for [day] at [hour]:[minute]. The time and the
+/// delivery mode are part of the payload so a pending request identifies its
+/// schedule exactly.
+Map<String, dynamic> dailyCheckPayload(
+  DateTime day, {
+  required int hour,
+  required int minute,
+  required bool exact,
+}) => {
   'kind': NotificationKind.dailyCheck,
   'date': isoDate(day),
   'time': '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}',
+  'exact': exact,
 };
+
+/// Whether reminders are scheduled as exact alarms: the "Pengingat tepat
+/// waktu" setting is on (default) and Android currently allows exact alarms
+/// (`SCHEDULE_EXACT_ALARM`). Otherwise they fall back to inexact alarms.
+Future<bool> exactRemindersActive(AppSettingsRepository settings, NotificationService notifications) async =>
+    await settings.getBool(SettingKeys.exactReminders, fallback: true) &&
+    await notifications.canScheduleExact();
+
+AndroidScheduleMode _scheduleMode(bool exact) =>
+    exact ? AndroidScheduleMode.exactAllowWhileIdle : AndroidScheduleMode.inexactAllowWhileIdle;
 
 /// Local notifications only (offline). Scheduling is a no-op on platforms
 /// without zoned scheduling support (desktop dev builds).
@@ -180,10 +201,35 @@ class NotificationService {
 
   Future<bool> requestPermission() async {
     if (!_canSchedule) return false;
-    final android = _plugin.resolvePlatformSpecificImplementation<
-      AndroidFlutterLocalNotificationsPlugin
-    >();
-    return await android?.requestNotificationsPermission() ?? false;
+    return await _android?.requestNotificationsPermission() ?? false;
+  }
+
+  AndroidFlutterLocalNotificationsPlugin? get _android =>
+      _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+
+  /// Whether Android currently allows exact alarms (always true below
+  /// Android 12; user-granted "Alarm & pengingat" from Android 14). False
+  /// where scheduling is unavailable.
+  Future<bool> canScheduleExact() async {
+    if (!_ready || !_canSchedule) return false;
+    try {
+      return await _android?.canScheduleExactNotifications() ?? false;
+    } catch (e, s) {
+      AppLogger.error('Gagal membaca izin alarm tepat waktu', e, s);
+      return false;
+    }
+  }
+
+  /// Opens the system "Alarm & pengingat" screen for FinBro when exact
+  /// alarms are not allowed yet; resolves to the resulting permission.
+  Future<bool> requestExactPermission() async {
+    if (!_ready || !_canSchedule) return false;
+    try {
+      return await _android?.requestExactAlarmsPermission() ?? false;
+    } catch (e, s) {
+      AppLogger.error('Gagal meminta izin alarm tepat waktu', e, s);
+      return false;
+    }
   }
 
   Future<void> show({
@@ -210,12 +256,14 @@ class NotificationService {
   }
 
   /// Schedules a one-shot notification at local [at]. Past times are ignored.
+  /// [exact] uses an exact alarm (caller checked [canScheduleExact]).
   Future<void> schedule({
     required int id,
     required DateTime at,
     required String title,
     required String body,
     required Map<String, dynamic> payload,
+    required bool exact,
     List<AndroidNotificationAction> actions = const [],
   }) async {
     if (!_ready || !_canSchedule || !at.isAfter(DateTime.now())) return;
@@ -226,7 +274,7 @@ class NotificationService {
         title: title,
         body: body,
         payload: jsonEncode(payload),
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        androidScheduleMode: _scheduleMode(exact),
         notificationDetails: NotificationDetails(
           android: AndroidNotificationDetails(
             _channelReminders.channelId,
@@ -245,15 +293,20 @@ class NotificationService {
   }
 
   /// Daily check for [day] at [time] with the three §2 actions.
-  Future<void> scheduleDailyCheck(DateTime day, {required int hour, required int minute}) =>
-      schedule(
-        id: NotificationIds.dailyCheck(day),
-        at: DateTime(day.year, day.month, day.day, hour, minute),
-        title: dailyCheckTitle,
-        body: dailyCheckBody,
-        payload: dailyCheckPayload(day, hour: hour, minute: minute),
-        actions: dailyCheckActions,
-      );
+  Future<void> scheduleDailyCheck(
+    DateTime day, {
+    required int hour,
+    required int minute,
+    required bool exact,
+  }) => schedule(
+    id: NotificationIds.dailyCheck(day),
+    at: DateTime(day.year, day.month, day.day, hour, minute),
+    title: dailyCheckTitle,
+    body: dailyCheckBody,
+    payload: dailyCheckPayload(day, hour: hour, minute: minute, exact: exact),
+    exact: exact,
+    actions: dailyCheckActions,
+  );
 
   /// Cancels the daily check and any pending "remind later" for [day].
   Future<void> cancelDailyCheck(DateTime day) async {
@@ -295,7 +348,8 @@ const dailyCheckActions = [
 
 /// Background isolate handler for actions that must not open the app:
 /// "No transaction today" writes NO_ACTIVITY; "Remind later" schedules one
-/// extra notification one hour later (only one, per test plan §3).
+/// extra notification one hour later (only one, per test plan §3), exact
+/// when the daily check itself was.
 @pragma('vm:entry-point')
 Future<void> notificationBackgroundHandler(NotificationResponse r) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -312,7 +366,7 @@ Future<void> notificationBackgroundHandler(NotificationResponse r) async {
         await db.close();
       }
     } else if (e.actionId == NotificationAction.remindLater) {
-      await scheduleRemindLater(day);
+      await scheduleRemindLater(day, exact: e.exact);
     }
   } catch (e, s) {
     // This isolate has no file logger; log into the app's log file directly.
@@ -337,13 +391,17 @@ Future<void> markNoActivity(AppDatabase db, DateTime day) async {
 }
 
 /// Schedules the single "remind later" notification (+1 hour) for [day].
-Future<void> scheduleRemindLater(DateTime day) async {
+/// [exact] (the daily check's mode) is honoured only while Android still
+/// allows exact alarms.
+Future<void> scheduleRemindLater(DateTime day, {required bool exact}) async {
   tzdata.initializeTimeZones();
   try {
     final info = await FlutterTimezone.getLocalTimezone();
     tz.setLocalLocation(tz.getLocation(info.identifier));
   } catch (_) {}
   final plugin = FlutterLocalNotificationsPlugin();
+  final android = plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+  final useExact = exact && (await android?.canScheduleExactNotifications() ?? false);
   final at = tz.TZDateTime.now(tz.local).add(const Duration(hours: 1));
   await plugin.zonedSchedule(
     id: NotificationIds.dailyCheckLater(day),
@@ -351,7 +409,7 @@ Future<void> scheduleRemindLater(DateTime day) async {
     title: dailyCheckTitle,
     body: dailyCheckBody,
     payload: jsonEncode({'kind': NotificationKind.dailyCheck, 'date': isoDate(day)}),
-    androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+    androidScheduleMode: _scheduleMode(useExact),
     notificationDetails: const NotificationDetails(
       android: AndroidNotificationDetails(
         'finbro_reminders',

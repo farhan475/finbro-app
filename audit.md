@@ -22,9 +22,9 @@ Audit read-only 2 Okt 2026: tidak ada temuan critical/high, 14 temuan medium/low
 | LOG-001 | Low | Rotasi di setiap tulis, `clear()` menghapus `finbro.log.1`, error SQLite dicatat tanpa statement/parameter. |
 
 ## Sisa risiko yang diketahui
-- Jam perangkat dimundurkan kira-kira sebesar lama perangkat tidur bisa menghindari relock. Penutupnya: `SystemClock.elapsedRealtime` via platform channel.
-- Error non-SQLite dicatat dengan `toString()`; drift `InvalidDataException` mungkin memuat nilai kolom.
-- CRC zip tidak diverifikasi oleh archive 4.3.0; lampiran belum punya checksum (DB dilindungi SHA-256).
+- Jam perangkat dimundurkan kira-kira sebesar lama perangkat tidur bisa menghindari relock. Penutupnya: `SystemClock.elapsedRealtime` via platform channel. **(Ditutup sejak audit: `elapsed_clock.dart` + `ClockChannel.kt` mengukur waktu sejak boot + boot count; dipakai `RelockTimer` dan limiter PIN.)**
+- Error non-SQLite dicatat dengan `toString()`; drift `InvalidDataException` mungkin memuat nilai kolom. **(Ditutup 2 Okt 2026: `AppLogger.describeError` meredaksi `InvalidDataException`.)**
+- CRC zip tidak diverifikasi oleh archive 4.3.0; lampiran belum punya checksum (DB dilindungi SHA-256). **(CRC ditutup 2 Okt 2026: `BackupService._unpack` membandingkan CRC32 hasil dekompresi dengan header zip untuk semua entry; checksum lampiran masih terbuka.)**
 
 ## Sudah diperiksa dan OK
 Zip-slip (hanya nama file dasar), header SQLite + SHA-256 + `integrity_check` sebelum swap, swap DB atomik, perbandingan PIN constant-time & hashing di isolate, lock menutup cold start, rute tanpa side effect, payload notifikasi hanya dari app, `allowBackup=false`, wipe hanya `kDebugMode`, escaping CSV RFC 4180, ekspor lewat dialog sistem, keystore di luar repo.

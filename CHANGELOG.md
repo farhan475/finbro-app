@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- Security: backup restore now verifies the CRC32 of every unpacked zip entry against its header (archive 4.3.0 ignores its `verify` flag); corrupted entries are rejected instead of restored.
+- Security: the error log redacts drift `InvalidDataException` messages, which embed the rejected row's column values.
+- UI: floating navbar keeps the frosted-glass container but removes the selected pill; active icon and label use accent color and stronger weight only. Home add FAB is raised and Home scroll clearance is increased to avoid overlap.
+- Android release: signed universal APK rebuilt after the UI correction. Device visual approval remains pending.
+- Flutter Web/Chrome build is blocked by the current SQLite/Drift `dart:ffi` dependency; no successful Chrome UI smoke test was obtained.
+- Fixed: recurring rule creation now joins the engine's serialized queue, preventing an in-flight sync from missing a newly created rule; report metrics reuse period summary and total balance instead of querying them again for available-to-spend.
 - Changed: Net Amount Saved / Savings Rate count only net transfers into Savings accounts; goal contributions are goal progress, not savings (no double counting).
 - Fixed: future-dated transactions no longer change balances before their date; deleting an auto-confirmed recurring transaction is not re-posted; development allocation ignores goal adjustments; emergency average no longer diluted by months before the first transaction (and cannot be NaN); budget end date covers the whole calendar day.
 - Fixed: leaving the transaction form while saving no longer deletes the attachments being linked; back is blocked during save; the form's camera/gallery picker no longer triggers the app lock.
@@ -12,7 +18,7 @@
 - Fixed: backups/safety snapshots never overwrite an earlier file; PIN salt+hash written atomically.
 - Security: PIN hash/salt and lock settings are no longer included in backups and restore keeps this device's lock; wrong-PIN limiter persists across restarts with escalating cooldowns; restored attachment rows that did not come from the zip are neutralized.
 - UI: lime accent `#5BEB12` replaces indigo (chart ramp derived from it, `accentText` for legible text on light surfaces); floating glass bottom navigation bar; negative balances/net cash flow red; goal "Development" uses theme monochrome.
-- Database schema v2: 11 query indexes, `PRAGMA busy_timeout = 5000`.
+- Database schema v2 (historical baseline): 11 query indexes, `PRAGMA busy_timeout = 5000`; current schema v3 adds linked savings accounts for goals.
 - Scanner: bounded image size, crop error state, picker exempt from relock, OCR dates outside 2000..today+365 ignored.
 - Budget thresholds compared in integers (exact hits no longer missed).
 - Recurring: rules never auto-post occurrences dated before the rule was created.

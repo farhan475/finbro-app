@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/theme/app_theme.dart';
 import '../../../core/utilities/app_logger.dart';
 import '../../backup/presentation/restore_result_overlay.dart';
 import '../../settings/domain/startup_checks.dart';
@@ -12,11 +15,17 @@ import 'lock_screen.dart';
 /// - full-screen PIN/biometric lock on cold start and on resume after the
 ///   configured timeout, blocking everything beneath (pointer, semantics,
 ///   focus and the Android back button);
+/// - while a relock decision waits for the device clock, an opaque cover
+///   hides the content so nothing shows before the decision;
 /// - marks a clean shutdown when the app is paused/detached (StartupChecks);
 /// - shows the post-restore result (its own Stack layer, not a dialog).
 class AppLockGate extends ConsumerStatefulWidget {
   const AppLockGate({super.key, required this.child});
   final Widget child;
+
+  /// Key of the cover shown while a relock decision is pending.
+  @visibleForTesting
+  static const pendingCoverKey = ValueKey('app-lock-pending-cover');
 
   /// Runs [action] — file picker, system permission prompt, share sheet —
   /// without re-locking when the external screen it opens pauses the app.
@@ -27,7 +36,7 @@ class AppLockGate extends ConsumerStatefulWidget {
     try {
       return await action();
     } finally {
-      if (_AppLockGateState._timer.endExempt()) _AppLockGateState._relockAfterExempt();
+      _AppLockGateState._settle(_AppLockGateState._timer.endExempt());
     }
   }
 
@@ -41,10 +50,32 @@ class _AppLockGateState extends ConsumerState<AppLockGate> with WidgetsBindingOb
   static bool _unlocked = false;
   static final _timer = RelockTimer();
   static _AppLockGateState? _current;
+  // Relock decisions still waiting for the device clock (process-wide like
+  // [_unlocked], so a rebuilt gate keeps covering).
+  static int _pending = 0;
 
   late final AppLifecycleListener _lifecycle;
 
-  static void _relockAfterExempt() {
+  /// Applies a relock decision; a pending one covers the content until it
+  /// completes. A failed decision locks.
+  static void _settle(FutureOr<bool> decision) {
+    if (decision is bool) {
+      if (decision) _relock();
+      return;
+    }
+    _pending++;
+    _current?._refresh();
+    decision.catchError((Object e, StackTrace s) {
+      AppLogger.error('Keputusan kunci ulang gagal', e, s);
+      return true;
+    }).then((lock) {
+      _pending--;
+      if (lock) _relock();
+      _current?._refresh();
+    });
+  }
+
+  static void _relock() {
     final gate = _current;
     if (gate != null && gate.mounted) {
       gate._lock();
@@ -53,6 +84,10 @@ class _AppLockGateState extends ConsumerState<AppLockGate> with WidgetsBindingOb
       // is set.
       _unlocked = false;
     }
+  }
+
+  void _refresh() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -82,9 +117,13 @@ class _AppLockGateState extends ConsumerState<AppLockGate> with WidgetsBindingOb
     super.dispose();
   }
 
-  /// Android back while locked must not pop routes under the lock screen.
+  /// Android back while locked (or while a relock decision is pending) must
+  /// not pop routes under the lock screen.
   @override
-  Future<bool> didPopRoute() async => !_unlocked;
+  Future<bool> didPopRoute() async => !_unlocked || _covered;
+
+  /// A relock decision is pending and there is something to hide.
+  bool get _covered => _pending > 0 && _unlocked && ref.read(appLockConfigProvider).pinEnabled;
 
   void _markClean() {
     ref.read(startupChecksProvider).markCleanShutdown().catchError(
@@ -94,7 +133,7 @@ class _AppLockGateState extends ConsumerState<AppLockGate> with WidgetsBindingOb
 
   void _onResume() {
     final config = ref.read(appLockConfigProvider);
-    if (_timer.resume(Duration(seconds: config.timeoutSeconds))) _lock();
+    _settle(_timer.resume(Duration(seconds: config.timeoutSeconds)));
   }
 
   void _lock() {
@@ -113,17 +152,22 @@ class _AppLockGateState extends ConsumerState<AppLockGate> with WidgetsBindingOb
     // (or restoring a backup that has one) never locks the current session.
     if (!config.pinEnabled) _unlocked = true;
     final locked = !_unlocked;
+    // Not ExcludeFocus: a decision that ends unlocked must keep the focused
+    // field (and its keyboard) as it was.
+    final covered = !locked && _pending > 0 && config.pinEnabled;
+    final hidden = locked || covered;
     return Stack(
       fit: StackFit.expand,
       children: [
         ExcludeFocus(
           excluding: locked,
           child: ExcludeSemantics(
-            excluding: locked,
-            child: IgnorePointer(ignoring: locked, child: widget.child),
+            excluding: hidden,
+            child: IgnorePointer(ignoring: hidden, child: widget.child),
           ),
         ),
-        if (!locked) const RestoreResultOverlay(),
+        if (!hidden) const RestoreResultOverlay(),
+        if (covered) ColoredBox(key: AppLockGate.pendingCoverKey, color: context.fin.background),
         if (locked)
           LockScreen(
             biometricEnabled: config.biometricEnabled,
