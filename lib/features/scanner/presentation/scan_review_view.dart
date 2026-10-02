@@ -404,7 +404,7 @@ class _ScanReviewViewState extends ConsumerState<ScanReviewView> {
             decoration: InputDecoration(
               labelText: 'Kategori',
               helperText: _suggestion?.categoryId != null && _suggestion!.categoryId == _categoryId
-                  ? 'Saran ${_suggestion!.source.label}'
+                  ? [_suggestion!.source.label, ?_suggestion!.seedMerchant].join(' · ')
                   : null,
             ),
             items: [

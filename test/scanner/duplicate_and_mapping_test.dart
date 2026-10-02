@@ -166,8 +166,8 @@ void main() {
       expect((await mappings.suggest('kantor', type: CategoryType.expense))!.categoryId, isNull);
     });
 
-    test('keyword fallback without mapping', () async {
-      final s = await mappings.suggest('APOTEK K24 CIPETE', type: CategoryType.expense);
+    test('keyword fallback without mapping or known merchant', () async {
+      final s = await mappings.suggest('APOTEK SEHAT CIPETE', type: CategoryType.expense);
       expect(s!.source, SuggestionSource.keyword);
       expect(s.categoryId, 'sys-expense-health');
       expect(await mappings.suggest('Zzyzx Corp', type: CategoryType.expense), isNull);

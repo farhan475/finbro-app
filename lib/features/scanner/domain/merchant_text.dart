@@ -45,46 +45,38 @@ String prettifyMerchant(String raw) {
   return s;
 }
 
+/// Generic words only; named merchants live in `merchant_seed.dart`, which
+/// `MerchantMappingRepository.suggest` consults first.
 const _keywordCategories = <String, List<String>>{
   'sys-expense-food': [
     'resto', 'restoran', 'restaurant', 'rumah makan', 'warung', 'warteg', 'cafe', 'kafe', 'coffee',
-    'kopi', 'bakso', 'mie', 'ayam', 'sate', 'soto', 'nasi', 'pizza', 'burger', 'kfc', 'mcd',
-    'mcdonald', 'starbucks', 'sushi', 'bakery', 'roti', 'food', 'gofood', 'grabfood', 'shopeefood',
-    'chatime', 'boba', 'teh', 'dimsum', 'padang', 'hokben', 'solaria', 'kenangan', 'janji jiwa',
-    'fore', 'tomoro', 'mixue', 'eatery', 'kitchen', 'dapur', 'catering', 'martabak', 'seblak',
+    'kopi', 'bakso', 'mie', 'ayam', 'sate', 'soto', 'nasi', 'pizza', 'burger', 'sushi', 'bakery',
+    'roti', 'food', 'boba', 'teh', 'dimsum', 'padang', 'eatery', 'kitchen', 'dapur', 'catering',
+    'martabak', 'seblak',
   ],
   'sys-expense-transport': [
-    'spbu', 'pertamina', 'shell', 'bp akr', 'vivo energy', 'parkir', 'parking', 'tol', 'toll',
-    'krl', 'mrt', 'lrt', 'transjakarta', 'bluebird', 'taxi', 'taksi', 'grab', 'gojek', 'goride',
-    'gocar', 'maxim', 'kai', 'kereta', 'bensin', 'damri', 'garuda', 'lion air', 'citilink', 'traveloka',
+    'spbu', 'parkir', 'parking', 'tol', 'toll', 'taxi', 'taksi', 'kereta', 'bensin',
   ],
   'sys-expense-bills': [
-    'pln', 'listrik', 'pdam', 'air minum', 'telkom', 'indihome', 'pulsa', 'token', 'internet',
-    'wifi', 'bpjs', 'telkomsel', 'xl axiata', 'indosat', 'smartfren', 'firstmedia', 'biznet',
-    'tagihan', 'iuran', 'sewa', 'kos', 'kost',
+    'listrik', 'air minum', 'pulsa', 'token', 'internet', 'wifi', 'tagihan', 'iuran', 'sewa', 'kos',
+    'kost',
   ],
   'sys-expense-shopping': [
-    'indomaret', 'alfamart', 'alfamidi', 'superindo', 'supermarket', 'hypermart', 'hypermarket',
-    'lottemart', 'transmart', 'giant', 'hero', 'ranch market', 'farmers market', 'minimarket', 'mart',
-    'tokopedia', 'shopee', 'lazada', 'blibli', 'uniqlo', 'h&m', 'zara', 'ace hardware', 'informa',
-    'ikea', 'miniso', 'gramedia', 'toko', 'store', 'shop', 'market', 'swalayan', 'grosir',
+    'supermarket', 'hypermarket', 'minimarket', 'mart', 'toko', 'store', 'shop', 'market',
+    'swalayan', 'grosir',
   ],
   'sys-expense-health': [
-    'apotek', 'apotik', 'pharmacy', 'kimia farma', 'guardian', 'watsons', 'century', 'klinik',
-    'clinic', 'rumah sakit', 'hospital', 'rs', 'dokter', 'lab', 'laboratorium', 'optik', 'k24',
+    'apotek', 'apotik', 'pharmacy', 'klinik', 'clinic', 'rumah sakit', 'hospital', 'rs', 'dokter',
+    'lab', 'laboratorium', 'optik',
   ],
   'sys-expense-entertainment': [
-    'cinema', 'xxi', 'cgv', 'cinepolis', 'bioskop', 'karaoke', 'timezone', 'game', 'steam',
-    'playstation', 'konser', 'tiket', 'ticket',
+    'cinema', 'bioskop', 'karaoke', 'game', 'konser', 'tiket', 'ticket',
   ],
-  'sys-expense-subscription': [
-    'netflix', 'spotify', 'youtube premium', 'disney', 'vidio', 'apple.com', 'google play',
-    'icloud', 'chatgpt', 'openai', 'canva', 'prime video', 'langganan', 'subscription',
-  ],
+  'sys-expense-subscription': ['google play', 'langganan', 'subscription'],
   'sys-expense-personal-care': [
-    'salon', 'barber', 'barbershop', 'spa', 'laundry', 'cukur', 'kosmetik', 'sociolla',
+    'salon', 'barber', 'barbershop', 'spa', 'laundry', 'cukur', 'kosmetik',
   ],
-  'sys-expense-education': ['kursus', 'course', 'sekolah', 'kampus', 'universitas', 'udemy', 'les ', 'bimbel'],
+  'sys-expense-education': ['kursus', 'course', 'sekolah', 'kampus', 'universitas', 'les ', 'bimbel'],
 };
 
 /// Offline keyword guess of a system expense category id for [merchant], or

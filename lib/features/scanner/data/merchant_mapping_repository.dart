@@ -4,25 +4,39 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/database/app_database.dart';
 import '../../../core/providers.dart';
 import '../../../core/utilities/ids.dart';
+import '../domain/merchant_seed.dart';
 import '../domain/merchant_text.dart';
 
 enum SuggestionSource {
   /// Learned from an earlier confirmed scan (`merchant_mappings`).
-  mapping('dari riwayat'),
+  mapping('Dari riwayat Anda'),
+
+  /// Built-in merchant dictionary ([seedMerchants]).
+  seed('Saran otomatis'),
 
   /// Offline keyword guess (e.g. "kopi" → Food).
-  keyword('tebakan otomatis');
+  keyword('Tebakan otomatis');
 
   const SuggestionSource(this.label);
   final String label;
 }
 
 class MerchantSuggestion {
-  const MerchantSuggestion({this.normalizedMerchant, this.categoryId, required this.source});
+  const MerchantSuggestion({
+    this.normalizedMerchant,
+    this.categoryId,
+    this.seedMerchant,
+    required this.source,
+  });
 
-  /// Clean merchant name learned earlier (mapping only).
+  /// Clean merchant name the user confirmed earlier (from the mapping).
   final String? normalizedMerchant;
   final String? categoryId;
+
+  /// Built-in merchant name when [source] is [SuggestionSource.seed].
+  final String? seedMerchant;
+
+  /// Where [categoryId] came from.
   final SuggestionSource source;
 }
 
@@ -39,9 +53,15 @@ class MerchantMappingRepository {
     return (db.select(db.merchantMappings)..where((m) => m.rawMerchant.equals(key))).getSingleOrNull();
   }
 
-  /// Mapping first (its category only if still active and of [type]); else
-  /// a keyword guess among active categories of [type]. Null when nothing
-  /// is known.
+  /// The app's single "category for this merchant text" entry point, for
+  /// scans and imported descriptions alike. Category precedence:
+  /// 1. the user's learned mapping (its category only if still active and
+  ///    of [type]);
+  /// 2. expense only: the built-in merchant dictionary ([seedMerchantFor]);
+  /// 3. expense only: a generic keyword guess ([keywordCategoryFor]).
+  /// A mapping without a usable category still supplies its
+  /// [MerchantSuggestion.normalizedMerchant]. Fallback categories must be
+  /// active. Null when nothing is known.
   Future<MerchantSuggestion?> suggest(String rawMerchant, {required CategoryType type}) async {
     if (merchantKey(rawMerchant).isEmpty) return null;
     Future<bool> usable(String? id) async {
@@ -51,18 +71,35 @@ class MerchantMappingRepository {
     }
 
     final mapping = await lookup(rawMerchant);
-    if (mapping != null) {
-      final ok = await usable(mapping.categoryId);
+    if (mapping != null && await usable(mapping.categoryId)) {
       return MerchantSuggestion(
         normalizedMerchant: mapping.normalizedMerchant,
-        categoryId: ok ? mapping.categoryId : null,
+        categoryId: mapping.categoryId,
         source: SuggestionSource.mapping,
       );
     }
-    if (type != CategoryType.expense) return null;
-    final guess = keywordCategoryFor(rawMerchant);
-    if (!await usable(guess)) return null;
-    return MerchantSuggestion(categoryId: guess, source: SuggestionSource.keyword);
+    final normalized = mapping?.normalizedMerchant;
+    if (type == CategoryType.expense) {
+      final seed = seedMerchantFor(rawMerchant);
+      if (seed != null && await usable(seed.categoryId)) {
+        return MerchantSuggestion(
+          normalizedMerchant: normalized,
+          categoryId: seed.categoryId,
+          seedMerchant: seed.name,
+          source: SuggestionSource.seed,
+        );
+      }
+      final guess = keywordCategoryFor(rawMerchant);
+      if (await usable(guess)) {
+        return MerchantSuggestion(
+          normalizedMerchant: normalized,
+          categoryId: guess,
+          source: SuggestionSource.keyword,
+        );
+      }
+    }
+    if (normalized == null) return null;
+    return MerchantSuggestion(normalizedMerchant: normalized, source: SuggestionSource.mapping);
   }
 
   /// Upserts the mapping for [rawMerchant] after the user confirmed a scan.

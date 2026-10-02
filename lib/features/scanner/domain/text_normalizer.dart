@@ -269,11 +269,12 @@ bool hasAnyPhrase(List<String> words, Iterable<String> phrases, {bool fuzzy = tr
 bool _wordMatches(String word, String keyword, bool fuzzy) {
   if (word == keyword) return true;
   if (!fuzzy || keyword.length < 5 || (word.length - keyword.length).abs() > 1) return false;
-  return _editDistanceAtMostOne(word, keyword);
+  return editDistanceAtMostOne(word, keyword);
 }
 
-bool _editDistanceAtMostOne(String a, String b) {
-  if (a.length > b.length) return _editDistanceAtMostOne(b, a);
+/// Levenshtein distance between [a] and [b] is at most 1.
+bool editDistanceAtMostOne(String a, String b) {
+  if (a.length > b.length) return editDistanceAtMostOne(b, a);
   var i = 0;
   var j = 0;
   var edits = 0;
