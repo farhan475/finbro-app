@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:collection/collection.dart';
-import 'package:cryptography/cryptography.dart' show Mac, SecretBox, SecretBoxAuthenticationError, SecretKey;
+import 'package:cryptography/cryptography.dart'
+    show Mac, SecretBox, SecretBoxAuthenticationError, SecretKey, SecretKeyData;
 import 'package:cryptography/dart.dart';
 
 import 'backup_service.dart';
@@ -102,48 +104,82 @@ class BackupKey {
   }
 }
 
-/// Parsed, not yet authenticated header of a `.finbro` file.
+/// Parsed, not yet authenticated header of a `.finbro` file, with the chunk
+/// layout implied by the file length.
 class EncryptedHeader {
-  const EncryptedHeader({required this.params, required this.salt, required this.nonce});
+  const EncryptedHeader({
+    required this.bytes,
+    required this.params,
+    required this.salt,
+    required this.noncePrefix,
+    required this.chunkSize,
+    required this.chunkCount,
+    required this.lastChunkLength,
+  });
+
+  /// The raw header (associated data of every chunk).
+  final Uint8List bytes;
   final KdfParams params;
   final Uint8List salt;
-  final Uint8List nonce;
+  final Uint8List noncePrefix;
+
+  /// Plaintext bytes per chunk; every chunk but the last is full.
+  final int chunkSize;
+  final int chunkCount;
+
+  /// Stored length (ciphertext ‖ tag) of the last chunk.
+  final int lastChunkLength;
 }
 
-/// `.finbro` container: header + AES-256-GCM of the backup zip
-/// ([BackupService.buildPackage] output). Layout, big-endian:
+/// `.finbro` container: header + the backup zip ([BackupService.buildPackage]
+/// output) as a sequence of AES-256-GCM chunks, so encryption and decryption
+/// stream file to file and never hold the zip in memory. Layout, big-endian:
 ///
 /// | offset | size | field                                   |
 /// |--------|------|-----------------------------------------|
 /// | 0      | 8    | magic `FINBROEN`                        |
-/// | 8      | 2    | format version (1)                      |
+/// | 8      | 2    | format version (2)                      |
 /// | 10     | 1    | KDF id (1 = Argon2id v1.3)              |
 /// | 11     | 4    | Argon2id memory (KiB)                   |
 /// | 15     | 4    | Argon2id iterations                     |
 /// | 19     | 1    | Argon2id parallelism                    |
 /// | 20     | 1    | salt length (16)                        |
 /// | 21     | 16   | salt                                    |
-/// | 37     | 1    | nonce length (12)                       |
-/// | 38     | 12   | nonce                                   |
-/// | 50     | n+16 | ciphertext ‖ GCM tag                    |
+/// | 37     | 1    | nonce prefix length (7)                 |
+/// | 38     | 7    | nonce prefix                            |
+/// | 45     | 4    | chunk size (plaintext bytes per chunk)  |
+/// | 49     | …    | chunks: ciphertext ‖ 16-byte GCM tag    |
 ///
-/// The whole header is GCM associated data: changing any header byte fails
-/// authentication. Crypto runs on background isolates.
+/// Every chunk holds `chunk size` plaintext bytes except the last (0 to
+/// `chunk size`; an empty zip is one tag-only chunk). Chunk `i` uses nonce
+/// `prefix ‖ uint32 i ‖ last-flag` (STREAM construction) and the whole
+/// header as associated data, so changing a header byte, reordering,
+/// dropping, truncating or appending chunks all fail authentication. Crypto
+/// runs on background isolates.
 abstract final class EncryptedBackup {
   static const extension = '.finbro';
   static const mimeType = 'application/octet-stream';
-  static const formatVersion = 1;
+  static const formatVersion = 2;
   static const kdfArgon2id = 1;
   static const keyLength = 32;
   static const saltLength = 16;
-  static const nonceLength = 12;
+  static const noncePrefixLength = 7;
   static const tagLength = 16;
-  static const headerLength = 50;
+  static const headerLength = 49;
   static const minPassphraseLength = 8;
   static final magic = Uint8List.fromList(ascii.encode('FINBROEN'));
 
-  /// Largest `.finbro` accepted: the zip limit plus the container overhead.
-  static const maxFileBytes = BackupService.maxBackupBytes + headerLength + tagLength;
+  static const defaultChunkSize = 1024 * 1024;
+
+  // Accepted chunk sizes when reading a header (bounds memory per chunk and
+  // the tag overhead in [maxFileBytes]).
+  static const minChunkSize = 64 * 1024;
+  static const maxChunkSize = 16 * 1024 * 1024;
+
+  /// Largest `.finbro` accepted: the zip limit plus header and the tags of
+  /// the smallest allowed chunk size.
+  static const maxFileBytes =
+      BackupService.maxBackupBytes + headerLength + tagLength * (BackupService.maxBackupBytes ~/ minChunkSize + 1);
 
   static const wrongKeyMessage =
       'Passphrase salah, atau file backup terenkripsi rusak/telah diubah.';
@@ -181,39 +217,72 @@ abstract final class EncryptedBackup {
     ));
   }
 
-  /// Encrypts [zip] with [key] (fresh random nonce) on a background isolate.
-  static Future<Uint8List> encrypt(Uint8List zip, BackupKey key) async {
-    if (zip.length > BackupService.maxBackupBytes) {
+  /// Encrypts the backup zip [zip] into [out] with [key] (fresh random nonce
+  /// prefix), chunk by chunk on a background isolate. [out] is removed when
+  /// encryption fails.
+  static Future<void> encrypt(File zip, File out, BackupKey key, {int chunkSize = defaultChunkSize}) async {
+    if (chunkSize < minChunkSize || chunkSize > maxChunkSize) {
+      throw ArgumentError.value(chunkSize, 'chunkSize');
+    }
+    if (await zip.length() > BackupService.maxBackupBytes) {
       throw const BackupException(BackupService.oversizeMessage);
     }
-    final nonce = _random(nonceLength);
-    final header = _header(key.params, key.salt, nonce);
+    final prefix = _random(noncePrefixLength);
+    final header = _header(key.params, key.salt, prefix, chunkSize);
     final keyBytes = key.key;
-    return Isolate.run(() async {
-      final box = await DartAesGcm.with256bits().encrypt(
-        zip,
-        secretKey: SecretKey(keyBytes),
-        nonce: nonce,
-        aad: header,
-      );
-      return (BytesBuilder(copy: false)
-            ..add(header)
-            ..add(box.cipherText)
-            ..add(box.mac.bytes))
-          .takeBytes();
-    });
+    final inPath = zip.path;
+    final outPath = out.path;
+    await _cleanOnError(out, () => Isolate.run(() => _encryptSync(inPath, outPath, header, prefix, chunkSize, keyBytes)));
   }
 
-  /// Parses and bounds-checks the header of [file]. Throws [BackupException]
-  /// for anything that is not a supported `.finbro`.
-  static EncryptedHeader readHeader(Uint8List file) {
-    if (file.length > maxFileBytes) throw const BackupException(oversizeMessage);
-    if (file.length < magic.length ||
-        !const ListEquality<int>().equals(file.sublist(0, magic.length), magic)) {
+  /// Parses and bounds-checks the header and chunk layout of [file]. Throws
+  /// [BackupException] for anything that is not a supported `.finbro`.
+  static Future<EncryptedHeader> readHeader(File file) async {
+    final raf = await file.open();
+    try {
+      final length = await raf.length();
+      return _parseHeader(await raf.read(headerLength), length);
+    } finally {
+      await raf.close();
+    }
+  }
+
+  /// Decrypts [file] into [out] with an already derived [key] on a
+  /// background isolate. Throws [BackupException] ([wrongKeyMessage]) when
+  /// authentication fails; [out] is removed on any failure.
+  static Future<void> decryptWithKey(File file, File out, BackupKey key) async {
+    final header = await readHeader(file);
+    if (!key.fitsHeader(header)) throw const BackupException(wrongKeyMessage);
+    final keyBytes = key.key;
+    final inPath = file.path;
+    final outPath = out.path;
+    await _cleanOnError(out, () => Isolate.run(() => _decryptSync(inPath, outPath, header, keyBytes)));
+  }
+
+  /// Derives the key with the salt and parameters stored in [file]'s header
+  /// and decrypts it into [out], both on one background isolate. Returns the
+  /// key (usable for further backups with the same passphrase).
+  static Future<BackupKey> decryptWithPassphrase(File file, File out, String passphrase, {DateTime? now}) async {
+    final header = await readHeader(file);
+    final created = now ?? DateTime.now();
+    final inPath = file.path;
+    final outPath = out.path;
+    final keyBytes = await _cleanOnError(out, () => Isolate.run(() async {
+      final keyBytes = await _derive(passphrase, header.salt, header.params);
+      _decryptSync(inPath, outPath, header, keyBytes);
+      return keyBytes;
+    }));
+    return BackupKey(key: keyBytes, salt: header.salt, params: header.params, createdAt: created);
+  }
+
+  static EncryptedHeader _parseHeader(Uint8List head, int fileLength) {
+    if (fileLength > maxFileBytes) throw const BackupException(oversizeMessage);
+    if (head.length < magic.length ||
+        !const ListEquality<int>().equals(head.sublist(0, magic.length), magic)) {
       throw const BackupException(notEncryptedMessage);
     }
-    if (file.length < 11) throw const BackupException(truncatedMessage);
-    final data = ByteData.sublistView(file);
+    if (head.length < 11) throw const BackupException(truncatedMessage);
+    final data = ByteData.sublistView(head);
     final version = data.getUint16(8);
     if (version != formatVersion) {
       throw BackupException(
@@ -221,74 +290,128 @@ abstract final class EncryptedBackup {
         'Perbarui FinBro lalu coba lagi.',
       );
     }
-    final kdf = file[10];
+    final kdf = head[10];
     if (kdf != kdfArgon2id) {
       throw BackupException(
         'Metode kunci (KDF $kdf) pada file backup tidak dikenal. Perbarui FinBro lalu coba lagi.',
       );
     }
-    if (file.length < headerLength + tagLength) throw const BackupException(truncatedMessage);
+    if (head.length < headerLength || fileLength < headerLength + tagLength) {
+      throw const BackupException(truncatedMessage);
+    }
     final params = KdfParams(
       memoryKiB: data.getUint32(11),
       iterations: data.getUint32(15),
-      parallelism: file[19],
+      parallelism: head[19],
     );
-    if (!params.isValid || file[20] != saltLength || file[37] != nonceLength) {
+    final chunkSize = data.getUint32(45);
+    if (!params.isValid ||
+        head[20] != saltLength ||
+        head[37] != noncePrefixLength ||
+        chunkSize < minChunkSize ||
+        chunkSize > maxChunkSize) {
       throw const BackupException(badParamsMessage);
     }
+    // Chunk layout from the body length: full chunks, then a shorter last
+    // one unless the body ends exactly on a chunk boundary.
+    final body = fileLength - headerLength;
+    final full = chunkSize + tagLength;
+    final rest = body % full;
+    if (rest > 0 && rest < tagLength) throw const BackupException(truncatedMessage);
+    final chunkCount = body ~/ full + (rest > 0 ? 1 : 0);
+    if (body - chunkCount * tagLength > BackupService.maxBackupBytes) {
+      throw const BackupException(oversizeMessage);
+    }
     return EncryptedHeader(
+      bytes: Uint8List.fromList(head.sublist(0, headerLength)),
       params: params,
-      salt: Uint8List.fromList(file.sublist(21, 21 + saltLength)),
-      nonce: Uint8List.fromList(file.sublist(38, 38 + nonceLength)),
+      salt: Uint8List.fromList(head.sublist(21, 21 + saltLength)),
+      noncePrefix: Uint8List.fromList(head.sublist(38, 38 + noncePrefixLength)),
+      chunkSize: chunkSize,
+      chunkCount: chunkCount,
+      lastChunkLength: rest > 0 ? rest : full,
     );
   }
 
-  /// Decrypts [file] with an already derived [key] on a background isolate.
-  /// Throws [BackupException] ([wrongKeyMessage]) when authentication fails.
-  static Future<Uint8List> decryptWithKey(Uint8List file, BackupKey key) async {
-    final header = readHeader(file);
-    if (!key.fitsHeader(header)) throw const BackupException(wrongKeyMessage);
-    final keyBytes = key.key;
-    return Isolate.run(() => _open(file, header, keyBytes));
-  }
-
-  /// Derives the key with the salt and parameters stored in [file]'s header
-  /// and decrypts it, both on one background isolate. Returns the zip and
-  /// the key (usable for further backups with the same passphrase).
-  static Future<({Uint8List zip, BackupKey key})> decryptWithPassphrase(
-    Uint8List file,
-    String passphrase, {
-    DateTime? now,
-  }) async {
-    final header = readHeader(file);
-    final created = now ?? DateTime.now();
-    return Isolate.run(() async {
-      final keyBytes = await _derive(passphrase, header.salt, header.params);
-      final zip = await _open(file, header, keyBytes);
-      return (
-        zip: zip,
-        key: BackupKey(key: keyBytes, salt: header.salt, params: header.params, createdAt: created),
-      );
-    });
-  }
-
-  static Future<Uint8List> _open(Uint8List file, EncryptedHeader header, Uint8List keyBytes) async {
-    final body = Uint8List.sublistView(file, headerLength);
-    final box = SecretBox(
-      Uint8List.sublistView(body, 0, body.length - tagLength),
-      nonce: header.nonce,
-      mac: Mac(Uint8List.sublistView(body, body.length - tagLength)),
-    );
+  static void _encryptSync(
+    String inPath,
+    String outPath,
+    Uint8List header,
+    Uint8List prefix,
+    int chunkSize,
+    Uint8List keyBytes,
+  ) {
+    final aes = DartAesGcm.with256bits();
+    final secret = SecretKeyData(keyBytes);
+    final input = File(inPath).openSync();
+    final output = File(outPath).openSync(mode: FileMode.writeOnly);
     try {
-      final clear = await DartAesGcm.with256bits().decrypt(
-        box,
-        secretKey: SecretKey(keyBytes),
-        aad: Uint8List.sublistView(file, 0, headerLength),
-      );
-      return clear is Uint8List ? clear : Uint8List.fromList(clear);
+      final length = input.lengthSync();
+      if (length > BackupService.maxBackupBytes) throw const BackupException(BackupService.oversizeMessage);
+      final count = length == 0 ? 1 : (length + chunkSize - 1) ~/ chunkSize;
+      output.writeFromSync(header);
+      for (var i = 0; i < count; i++) {
+        final want = min(chunkSize, length - i * chunkSize);
+        final clear = input.readSync(want);
+        if (clear.length != want) throw const BackupException('File backup berubah saat dienkripsi.');
+        final box = aes.encryptSync(clear, secretKeyData: secret, nonce: _chunkNonce(prefix, i, i == count - 1), aad: header);
+        output
+          ..writeFromSync(box.cipherText)
+          ..writeFromSync(box.mac.bytes);
+      }
+      output.flushSync();
+    } finally {
+      input.closeSync();
+      output.closeSync();
+    }
+  }
+
+  static void _decryptSync(String inPath, String outPath, EncryptedHeader header, Uint8List keyBytes) {
+    final aes = DartAesGcm.with256bits();
+    final secret = SecretKeyData(keyBytes);
+    final input = File(inPath).openSync();
+    final output = File(outPath).openSync(mode: FileMode.writeOnly);
+    try {
+      input.setPositionSync(headerLength);
+      for (var i = 0; i < header.chunkCount; i++) {
+        final last = i == header.chunkCount - 1;
+        final length = last ? header.lastChunkLength : header.chunkSize + tagLength;
+        final chunk = input.readSync(length);
+        if (chunk.length != length) throw const BackupException(truncatedMessage);
+        final box = SecretBox(
+          Uint8List.sublistView(chunk, 0, length - tagLength),
+          nonce: _chunkNonce(header.noncePrefix, i, last),
+          mac: Mac(Uint8List.sublistView(chunk, length - tagLength)),
+        );
+        output.writeFromSync(aes.decryptSync(box, secretKeyData: secret, aad: header.bytes));
+      }
+      // The file grew after its header was read: never accept extra bytes.
+      if (input.positionSync() != input.lengthSync()) throw const BackupException(wrongKeyMessage);
+      output.flushSync();
     } on SecretBoxAuthenticationError {
       throw const BackupException(wrongKeyMessage);
+    } finally {
+      input.closeSync();
+      output.closeSync();
     }
+  }
+
+  static Future<T> _cleanOnError<T>(File out, Future<T> Function() run) async {
+    try {
+      return await run();
+    } catch (_) {
+      try {
+        if (await out.exists()) await out.delete();
+      } catch (_) {}
+      rethrow;
+    }
+  }
+
+  static Uint8List _chunkNonce(Uint8List prefix, int index, bool last) {
+    final n = Uint8List(12)..setAll(0, prefix);
+    ByteData.sublistView(n).setUint32(noncePrefixLength, index);
+    n[11] = last ? 1 : 0;
+    return n;
   }
 
   static Future<Uint8List> _derive(String passphrase, Uint8List salt, KdfParams params) async {
@@ -301,7 +424,7 @@ abstract final class EncryptedBackup {
     return Uint8List.fromList(await key.extractBytes());
   }
 
-  static Uint8List _header(KdfParams params, Uint8List salt, Uint8List nonce) {
+  static Uint8List _header(KdfParams params, Uint8List salt, Uint8List prefix, int chunkSize) {
     final b = Uint8List(headerLength);
     final d = ByteData.sublistView(b);
     b.setAll(0, magic);
@@ -312,8 +435,9 @@ abstract final class EncryptedBackup {
     b[19] = params.parallelism;
     b[20] = saltLength;
     b.setAll(21, salt);
-    b[37] = nonceLength;
-    b.setAll(38, nonce);
+    b[37] = noncePrefixLength;
+    b.setAll(38, prefix);
+    d.setUint32(45, chunkSize);
     return b;
   }
 

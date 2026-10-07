@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart' show sha256;
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:finbro_app/core/database/app_database.dart';
+import 'package:finbro_app/core/database/database_cipher.dart';
 import 'package:finbro_app/core/database/seed.dart';
 import 'package:finbro_app/core/ledger/ledger_service.dart';
 import 'package:finbro_app/core/settings/app_settings_repository.dart';
@@ -27,6 +28,10 @@ void main() {
   late LedgerService ledger;
   late BackupService service;
   final now = DateTime(2026, 9, 30, 21, 5);
+  // This device's database key: restores land encrypted with it.
+  final key = DatabaseKey.generate();
+
+  String header(File f) => String.fromCharCodes(f.readAsBytesSync().take(16));
 
   Future<String> account(String name, int opening) async {
     final id = 'acc-$name';
@@ -81,6 +86,24 @@ void main() {
     }
     return ZipEncoder().encodeBytes(out);
   }
+  Future<File> writeZip(Uint8List bytes, [String prefix = 'zip']) async {
+    final file = File(p.join(tmp.path, '$prefix-${DateTime.now().microsecondsSinceEpoch}.zip'));
+    await file.writeAsBytes(bytes);
+    return file;
+  }
+
+  Future<ValidatedBackup> validateZip(Uint8List bytes, {
+    int? currentSchemaVersion,
+    int? entryLimit,
+    int? totalLimit,
+  }) async {
+    final file = await writeZip(bytes);
+    return BackupService.validateFile(file,
+        workDir: () async => work,
+        currentSchemaVersion: currentSchemaVersion ?? AppDatabase.currentSchemaVersion,
+        entryLimit: entryLimit ?? BackupService.maxEntryBytes,
+        totalLimit: totalLimit ?? BackupService.maxUnpackedBytes);
+  }
 
   setUp(() async {
     tmp = await Directory.systemTemp.createTemp('finbro-backup-test-');
@@ -111,7 +134,7 @@ void main() {
     expect(await AppSettingsRepository(db).get(SettingKeys.lastBackupAt), '2026-09-30T21:05:00');
     expect(await count(db, 'backups'), 1);
 
-    final validated = BackupService.validate(created.package.bytes);
+    final validated = await validateZip(await created.file.readAsBytes());
     final m = validated.manifest;
     expect(m.app, 'FinBro');
     expect(m.schemaVersion, AppDatabase.currentSchemaVersion);
@@ -132,16 +155,16 @@ void main() {
             .where((f) => p.basename(f.path).startsWith(BackupService.safetyPrefix));
         expect(safety, hasLength(1), reason: 'safety snapshot must exist before the swap');
         snapshotSeenDuringReplace = safety.single;
-        await replace(dbFile);
+        await replace((file: dbFile, key: key));
       },
     );
     expect(snapshot.path, snapshotSeenDuringReplace!.path);
     expect(p.basename(snapshot.path), 'safety-finbro-backup-2026-09-30-2106.zip');
     // The snapshot holds the pre-restore data (4 transactions).
-    final snap = BackupService.validate(await snapshot.readAsBytes());
-    expect(snap.manifest.transactions, 4);
+    await validateZip(await snapshot.readAsBytes());
 
-    final restored = AppDatabase(NativeDatabase(dbFile));
+    expect(header(dbFile), isNot('SQLite format 3\u0000'), reason: 'the restored live DB is encrypted');
+    final restored = AppDatabase.encrypted(dbFile, key);
     addTearDown(restored.close);
     expect(await count(restored, 'transactions'), m.transactions);
     expect(await count(restored, 'accounts'), m.accounts);
@@ -151,15 +174,53 @@ void main() {
     expect(report.ok, isTrue, reason: report.summary.join('; '));
   });
 
+  test('an encrypted live database backs up as plain SQLite and restores under another device key', () async {
+    // Device A: the live database is SQLCipher-encrypted with its own key.
+    final liveA = File(p.join(tmp.path, 'deviceA', 'finbro.sqlite'));
+    await liveA.parent.create();
+    await db.close();
+    db = AppDatabase.encrypted(liveA, DatabaseKey.generate());
+    ledger = LedgerService(db);
+    service = BackupService(
+      db: db,
+      attachmentsDir: () async => attachments,
+      backupsDir: () async => backups,
+      workDir: () async => work,
+    );
+    await seedData();
+    expect(header(liveA), isNot('SQLite format 3\u0000'));
+
+    final package = await service.buildPackage(now);
+    final validated = await validateZip(await package.file.readAsBytes());
+    // Portable: plain SQLite, readable without any key.
+    expect(header(validated.sqliteFile), 'SQLite format 3\u0000');
+    final plain = AppDatabase(NativeDatabase(validated.sqliteFile));
+    expect(await count(plain, 'transactions'), 3);
+    await plain.close();
+
+    // Device B restores it under its own key.
+    final liveB = File(p.join(tmp.path, 'deviceB', 'finbro.sqlite'));
+    final attachmentsB = await Directory(p.join(tmp.path, 'deviceB', 'attachments')).create(recursive: true);
+    await BackupService.installBackup(validated, dbFile: liveB, key: key, attachmentsDir: attachmentsB, workDir: work);
+    expect(header(liveB), isNot('SQLite format 3\u0000'));
+    final restored = AppDatabase.encrypted(liveB, key);
+    addTearDown(restored.close);
+    expect(await count(restored, 'transactions'), 3);
+    expect(await count(restored, 'accounts'), 2);
+    final att = await restored.select(restored.attachments).getSingle();
+    expect(await File(att.localPath).readAsString(), 'receipt-bytes');
+    await package.dispose();
+    await validated.dispose();
+  });
+
   test('backups carry no PIN data and restore keeps this device\'s lock settings', () async {
     await seedData();
     final settings = AppSettingsRepository(db);
     await settings.set(SettingKeys.pinHash, 'old-hash');
     await settings.set(SettingKeys.pinSalt, 'old-salt');
     final created = await service.createBackup(now);
-    final validated = BackupService.validate(created.package.bytes);
-
-    final staged = File(p.join(tmp.path, 'inspect.sqlite'))..writeAsBytesSync(validated.sqlite);
+    final validated = await validateZip(await created.file.readAsBytes());
+    final staged = validated.sqliteFile;
     final backupDb = AppDatabase(NativeDatabase(staged));
     addTearDown(backupDb.close);
     expect(await AppSettingsRepository(backupDb).get(SettingKeys.pinHash), isNull);
@@ -172,12 +233,43 @@ void main() {
     await service.restore(
       validated,
       now: now.add(const Duration(minutes: 1)),
-      replaceDatabase: (replace) => replace(dbFile),
+      replaceDatabase: (replace) => replace((file: dbFile, key: key)),
     );
-    final restored = AppDatabase(NativeDatabase(dbFile));
+    final restored = AppDatabase.encrypted(dbFile, key);
     addTearDown(restored.close);
     expect(await AppSettingsRepository(restored).get(SettingKeys.pinHash), 'device-hash');
     expect(await AppSettingsRepository(restored).get(SettingKeys.pinSalt), 'device-salt');
+  });
+
+  test('safety snapshot retention keeps the newest two and manual backups are untouched', () async {
+    await seedData();
+    final backupsDirPath = backups.path;
+    File make(String name, DateTime modified) {
+      final f = File(p.join(backupsDirPath, name))..writeAsStringSync('x');
+      f.setLastModifiedSync(modified);
+      return f;
+    }
+
+    final keep1 = make('${BackupService.safetyPrefix}-2026-09-30-1000.zip', DateTime(2026, 9, 30, 10));
+    final keep2 = make('${BackupService.safetyPrefix}-2026-09-30-1100.zip', DateTime(2026, 9, 30, 11));
+    make('${BackupService.safetyPrefix}-2026-09-30-0900.zip', DateTime(2026, 9, 30, 9));
+    final manual = make('finbro-backup-2026-09-30-0905.zip', DateTime(2026, 9, 30, 9, 5));
+
+    final deleted = await service.pruneSafetySnapshots(now);
+    expect(deleted.map(p.basename), ['${BackupService.safetyPrefix}-2026-09-30-0900.zip']);
+    expect(keep1.existsSync(), isTrue);
+    expect(keep2.existsSync(), isTrue);
+    expect(manual.existsSync(), isTrue, reason: 'retention only touches safety snapshots');
+
+    // A new snapshot protects itself and counts towards keep: with keep = 2
+    // the previous newest (1100) also stays; 1000 goes (0900 was already
+    // deleted by the first prune, so only it can be reported here).
+    final fresh = File(p.join(backupsDirPath, '${BackupService.safetyPrefix}-2026-09-30-1200.zip'))..writeAsStringSync('x');
+    final deleted2 = await service.pruneSafetySnapshots(now, protect: fresh.path);
+    expect(deleted2.map(p.basename).toSet(), {'${BackupService.safetyPrefix}-2026-09-30-1000.zip'});
+    expect(fresh.existsSync(), isTrue);
+    expect(keep2.existsSync(), isTrue);
+    expect(keep1.existsSync(), isFalse);
   });
 
   test('two safety snapshots in the same minute never overwrite each other', () async {
@@ -188,13 +280,15 @@ void main() {
     final second = await service.createSafetySnapshot(now);
 
     expect(second.path, isNot(first.path));
-    expect(await first.readAsBytes(), firstBytes);
+    // Retention (keep 2, the new snapshot included) keeps both files alive.
+    expect(await first.exists(), isTrue);
     expect(await second.exists(), isTrue);
+    expect(firstBytes, isNotEmpty);
   });
 
   test('restore keeps the newer of the live last-backup date and the backup date', () async {
     await seedData();
-    final old = BackupService.validate((await service.createBackup(now)).package.bytes);
+    final old = await validateZip(await (await service.createBackup(now)).file.readAsBytes());
     final later = now.add(const Duration(days: 3));
     await service.createBackup(later);
 
@@ -206,8 +300,8 @@ void main() {
         backupsDir: () async => backups,
         workDir: () async => work,
       );
-      await s.restore(old, now: later, replaceDatabase: (replace) => replace(dbFile));
-      final restored = AppDatabase(NativeDatabase(dbFile));
+      await s.restore(old, now: later, replaceDatabase: (replace) => replace((file: dbFile, key: key)));
+      final restored = AppDatabase.encrypted(dbFile, key);
       addTearDown(restored.close);
       return AppSettingsRepository(restored).get(SettingKeys.lastBackupAt);
     }
@@ -223,19 +317,21 @@ void main() {
   test('restore on a new device rewrites attachment paths and prunes stale files', () async {
     await seedData();
     final package = await service.buildPackage(now);
-    final validated = BackupService.validate(package.bytes);
+    final validated = await validateZip(await package.file.readAsBytes());
 
     final newAttachments = await Directory(p.join(tmp.path, 'device2', 'attachments')).create(recursive: true);
     final stale = File(p.join(newAttachments.path, 'old.jpg'))..writeAsStringSync('old');
     final dbFile = File(p.join(tmp.path, 'device2', 'finbro.sqlite'));
-    await BackupService.installBackup(validated, dbFile: dbFile, attachmentsDir: newAttachments, workDir: work);
+    await BackupService.installBackup(validated, dbFile: dbFile, key: key, attachmentsDir: newAttachments, workDir: work);
 
-    final restored = AppDatabase(NativeDatabase(dbFile));
+    final restored = AppDatabase.encrypted(dbFile, key);
     addTearDown(restored.close);
     final att = await restored.select(restored.attachments).getSingle();
     expect(att.localPath, p.join(newAttachments.path, 'r1.jpg'));
     expect(await File(att.localPath).readAsString(), 'receipt-bytes');
     expect(stale.existsSync(), isFalse);
+    await package.dispose();
+    await validated.dispose();
     expect(await work.list().toList(), isEmpty, reason: 'staging files cleaned up');
   });
 
@@ -243,62 +339,61 @@ void main() {
     await seedData();
     final package = await service.buildPackage(now);
 
-    expect(() => BackupService.validate(Uint8List.fromList(List.generate(512, (i) => i % 251))),
+    await expectLater(validateZip(Uint8List.fromList(List.generate(512, (i) => i % 251))),
         throwsA(isA<BackupException>()));
-    expect(() => BackupService.validate(Uint8List.sublistView(package.bytes, 0, package.bytes.length ~/ 2)),
+    final packageBytes = await package.file.readAsBytes();
+    await expectLater(validateZip(Uint8List.sublistView(packageBytes, 0, packageBytes.length ~/ 2)),
         throwsA(isA<BackupException>()));
 
     final noManifest = ZipEncoder().encodeBytes(Archive()..add(ArchiveFile.string('finbro.sqlite', 'x')));
-    expect(() => BackupService.validate(noManifest),
+    await expectLater(validateZip(noManifest),
         throwsA(isA<BackupException>().having((e) => e.message, 'message', contains('manifest.json'))));
 
-    final foreign = tamper(package.bytes, manifest: (m) => {...m, 'app': 'OtherApp'});
-    expect(() => BackupService.validate(foreign),
+    final foreign = tamper(packageBytes, manifest: (m) => {...m, 'app': 'OtherApp'});
+    await expectLater(validateZip(foreign),
         throwsA(isA<BackupException>().having((e) => e.message, 'message', contains('bukan backup FinBro'))));
   });
 
   test('sha256 mismatch is rejected', () async {
     await seedData();
     final package = await service.buildPackage(now);
-    final validated = BackupService.validate(package.bytes);
-
-    final altered = Uint8List.fromList(validated.sqlite)..[validated.sqlite.length - 1] ^= 0xFF;
-    expect(() => BackupService.validate(tamper(package.bytes, sqlite: altered)),
+    final validated = await validateZip(await package.file.readAsBytes());
+    final altered = Uint8List.fromList(await validated.sqliteFile.readAsBytes())
+      ..[validated.sqliteFile.lengthSync() - 1] ^= 0xFF;
+    await expectLater(validateZip(tamper(await package.file.readAsBytes(), sqlite: altered)),
         throwsA(isA<BackupException>().having((e) => e.message, 'message', contains('Checksum'))));
-
-    final wrongHash = tamper(package.bytes, manifest: (m) => {...m, 'sha256': '0' * 64});
-    expect(() => BackupService.validate(wrongHash),
+    final wrongHash = tamper(await package.file.readAsBytes(), manifest: (m) => {...m, 'sha256': '0' * 64});
+    await expectLater(validateZip(wrongHash),
         throwsA(isA<BackupException>().having((e) => e.message, 'message', contains('Checksum'))));
   });
-
   test('newer schema version is rejected, older is accepted', () async {
     await seedData();
     final package = await service.buildPackage(now);
-
-    final newer = tamper(package.bytes,
+    final packageBytes = await package.file.readAsBytes();
+    final newer = tamper(packageBytes,
         manifest: (m) => {...m, 'schemaVersion': AppDatabase.currentSchemaVersion + 1});
-    expect(() => BackupService.validate(newer),
+    await expectLater(validateZip(newer),
         throwsA(isA<BackupException>().having((e) => e.message, 'message', contains('lebih baru'))));
-
-    // A future app (schema current+1) accepts today's backup as "older".
-    final v = BackupService.validate(package.bytes,
+    final v = await validateZip(packageBytes,
         currentSchemaVersion: AppDatabase.currentSchemaVersion + 1);
     expect(v.manifest.schemaVersion, AppDatabase.currentSchemaVersion);
   });
-
   test('failed install keeps the old database and removes extracted files', () async {
     await seedData();
-    final validated = BackupService.validate((await service.buildPackage(now)).bytes);
+    final validated = await validateZip(await (await service.buildPackage(now)).file.readAsBytes());
+    final brokenSqlite = File(p.join(tmp.path, 'broken.sqlite'));
+    await brokenSqlite.writeAsBytes(Uint8List.fromList(
+        [...'SQLite format 3\u0000'.codeUnits, ...List.filled(4096, 7)]));
     final broken = ValidatedBackup(
-      manifest: validated.manifest,
-      sqlite: Uint8List.fromList([...'SQLite format 3\u0000'.codeUnits, ...List.filled(4096, 7)]),
-      files: validated.files,
+      manifest: validated.manifest, sqliteFile: brokenSqlite, files: validated.files,
+      ownedDirectory: validated.ownedDirectory,
     );
+
     final target = await Directory(p.join(tmp.path, 'd3', 'attachments')).create(recursive: true);
     final dbFile = File(p.join(tmp.path, 'd3', 'finbro.sqlite'))..writeAsStringSync('old-db');
 
     await expectLater(
-      BackupService.installBackup(broken, dbFile: dbFile, attachmentsDir: target, workDir: work),
+      BackupService.installBackup(broken, dbFile: dbFile, key: key, attachmentsDir: target, workDir: work),
       throwsA(anything),
     );
     expect(dbFile.readAsStringSync(), 'old-db');
@@ -320,7 +415,7 @@ void main() {
   test('a tampered attachment entry fails validation via its manifest checksum', () async {
     await seedData();
     final created = await service.createBackup(now);
-    final src = ZipDecoder().decodeBytes(created.package.bytes);
+    final src = ZipDecoder().decodeBytes(await created.file.readAsBytes());
 
     // Rebuild the zip with different attachment bytes (valid zip: CRC fixed
     // by the encoder), so only the manifest SHA-256 can catch the change.
@@ -334,28 +429,22 @@ void main() {
     }
     final zip = ZipEncoder().encodeBytes(out);
 
-    expect(
-      () => BackupService.validate(zip),
-      throwsA(
-        isA<BackupException>().having(
-          (e) => e.message, 'message', contains('Checksum lampiran r1.jpg tidak cocok'),
-        ),
-      ),
-    );
+    await expectLater(validateZip(zip), throwsA(isA<BackupException>().having(
+      (e) => e.message, 'message', contains('Checksum lampiran r1.jpg tidak cocok'))));
   });
 
   test('restore writes the manifest checksum into attachments and integrity check verifies it', () async {
     await seedData();
     final created = await service.createBackup(now);
-    final validated = BackupService.validate(created.package.bytes);
+    final validated = await validateZip(await created.file.readAsBytes());
 
     final dbFile = File(p.join(tmp.path, 'live', 'finbro.sqlite'));
     await service.restore(
       validated,
       now: now.add(const Duration(minutes: 1)),
-      replaceDatabase: (replace) => replace(dbFile),
+      replaceDatabase: (replace) => replace((file: dbFile, key: key)),
     );
-    final restored = AppDatabase(NativeDatabase(dbFile));
+    final restored = AppDatabase.encrypted(dbFile, key);
     addTearDown(restored.close);
 
     final att = await restored.select(restored.attachments).getSingle();
@@ -381,10 +470,10 @@ void main() {
       categoryId: SystemCategories.salary, transactionAt: now, note: '=HYPERLINK("x")',
     ));
     final lines = (await buildTransactionsCsv(db)).substring(1).trim().split('\r\n');
-    expect(lines.first, 'date,type,amount,category,account,to_account,note,source,status');
-    expect(lines, contains('2026-09-30T21:05:00,expense,25000,Food,BCA,,"Makan, ""siang""",manual,confirmed'));
-    expect(lines, contains('2026-09-30T21:05:00,transfer,100000,,BCA,Cash,,manual,confirmed'));
-    expect(lines, contains('2026-09-30T21:05:00,income,1500000,Salary,BCA,,"\'=HYPERLINK(""x"")",manual,confirmed'));
+    expect(lines.first, 'date,type,amount,currency,category,account,to_account,note,source,status');
+    expect(lines, contains('2026-09-30T21:05:00,expense,25000,IDR,Food,BCA,,"Makan, ""siang""",manual,confirmed'));
+    expect(lines, contains('2026-09-30T21:05:00,transfer,100000,IDR,,BCA,Cash,,manual,confirmed'));
+    expect(lines, contains('2026-09-30T21:05:00,income,1500000,IDR,Salary,BCA,,"\'=HYPERLINK(""x"")",manual,confirmed'));
     // Leading tab / carriage return also start a formula in some spreadsheets.
     expect(csvField('\t=1+1'), "'\t=1+1");
     expect(csvField('\r=1+1'), '"\'\r=1+1"');
@@ -394,12 +483,12 @@ void main() {
   Future<Uint8List> withMutatedDb(Future<void> Function(AppDatabase d) mutate) async {
     final package = await service.buildPackage(now);
     final file = File(p.join(tmp.path, 'mutate-${DateTime.now().microsecondsSinceEpoch}.sqlite'))
-      ..writeAsBytesSync(BackupService.validate(package.bytes).sqlite);
+      ..writeAsBytesSync((await validateZip(await package.file.readAsBytes())).sqliteFile.readAsBytesSync());
     final d = AppDatabase(NativeDatabase(file));
     await mutate(d);
     await d.close();
     final sqlite = file.readAsBytesSync();
-    return tamper(package.bytes, sqlite: sqlite, manifest: (m) => {...m, 'sha256': sha256.convert(sqlite).toString()});
+    return tamper(package.file.readAsBytesSync(), sqlite: sqlite, manifest: (m) => {...m, 'sha256': sha256.convert(sqlite).toString()});
   }
 
   test('restore rejects a database whose user_version is missing, newer or not the manifest\'s', () async {
@@ -411,11 +500,11 @@ void main() {
     };
     for (final MapEntry(key: version, value: message) in cases.entries) {
       final zip = await withMutatedDb((d) => d.customStatement('PRAGMA user_version = $version'));
-      final validated = BackupService.validate(zip);
+      final validated = await validateZip(zip);
       final target = await Directory(p.join(tmp.path, 'v$version', 'attachments')).create(recursive: true);
       final dbFile = File(p.join(tmp.path, 'v$version', 'finbro.sqlite'))..writeAsStringSync('old-db');
       await expectLater(
-        BackupService.installBackup(validated, dbFile: dbFile, attachmentsDir: target, workDir: work),
+        BackupService.installBackup(validated, dbFile: dbFile, key: key, attachmentsDir: target, workDir: work),
         throwsA(isA<BackupException>().having((e) => e.message, 'message', contains(message))),
         reason: 'user_version $version',
       );
@@ -443,18 +532,18 @@ void main() {
     await v2.close();
     final sqlite = v2File.readAsBytesSync();
     final zip = tamper(
-      (await service.buildPackage(now)).bytes,
+      (await service.buildPackage(now)).file.readAsBytesSync(),
       sqlite: sqlite,
       manifest: (m) => {...m, 'schemaVersion': 2, 'sha256': sha256.convert(sqlite).toString()},
     );
 
-    final validated = BackupService.validate(zip);
+    final validated = await validateZip(zip);
     expect(validated.manifest.schemaVersion, 2);
     final target = await Directory(p.join(tmp.path, 'from-v2', 'attachments')).create(recursive: true);
     final dbFile = File(p.join(tmp.path, 'from-v2', 'finbro.sqlite'));
-    await BackupService.installBackup(validated, dbFile: dbFile, attachmentsDir: target, workDir: work);
+    await BackupService.installBackup(validated, dbFile: dbFile, key: key, attachmentsDir: target, workDir: work);
 
-    final restored = AppDatabase(NativeDatabase(dbFile));
+    final restored = AppDatabase.encrypted(dbFile, key);
     addTearDown(restored.close);
     final goal = await restored.select(restored.goals).getSingle();
     expect((goal.id, goal.currentAmount, goal.linkedAccountId), ('g1', 1500000, null));
@@ -477,10 +566,9 @@ void main() {
     });
     final target = await Directory(p.join(tmp.path, 'd4', 'attachments')).create(recursive: true);
     final dbFile = File(p.join(tmp.path, 'd4', 'finbro.sqlite'));
-    await BackupService.installBackup(BackupService.validate(zip),
-        dbFile: dbFile, attachmentsDir: target, workDir: work, lastBackupAt: now);
-
-    final restored = AppDatabase(NativeDatabase(dbFile));
+    await BackupService.installBackup(await validateZip(zip),
+        dbFile: dbFile, key: key, attachmentsDir: target, workDir: work, lastBackupAt: now);
+    final restored = AppDatabase.encrypted(dbFile, key);
     addTearDown(restored.close);
     final extras = await restored
         .customSelect("SELECT name FROM sqlite_master WHERE type IN ('trigger', 'view')")
@@ -493,37 +581,36 @@ void main() {
 
   test('a backup that restore would reject is never produced', () async {
     await seedData();
-    final zip = (await service.buildPackage(now)).bytes;
+    final first = await service.buildPackage(now);
+    final zip = await first.file.readAsBytes();
     final entries = ZipDecoder().decodeBytes(zip);
     final largest = entries.map((f) => f.size).reduce((a, b) => a > b ? a : b);
     final total = entries.fold(0, (sum, f) => sum + f.size);
-    final tooLarge = throwsA(isA<BackupException>().having((e) => e.message, 'message', contains('terlalu besar untuk dipulihkan')));
+    final tooLargeContent = throwsA(isA<BackupException>().having((e) => e.message, 'message', contains('terlalu besar untuk dipulihkan')));
+    final tooLargeZip = throwsA(isA<BackupException>().having((e) => e.message, 'message', contains('maksimal')));
 
-    await expectLater(service.buildPackage(now, zipLimit: zip.length - 1), tooLarge);
-    await expectLater(service.buildPackage(now, entryLimit: largest - 1), tooLarge);
-    await expectLater(service.buildPackage(now, totalLimit: total - 1), tooLarge);
+    await expectLater(service.buildPackage(now, zipLimit: zip.length - 1), tooLargeZip);
+    await expectLater(service.buildPackage(now, entryLimit: largest - 1), tooLargeContent);
+    await expectLater(service.buildPackage(now, totalLimit: total - 1), tooLargeContent);
+    await first.dispose();
     expect(await work.list().toList(), isEmpty, reason: 'export files cleaned up');
-
-    // Exactly at the limits the package is produced and passes validation.
-    final ok = await service.buildPackage(now, zipLimit: zip.length, entryLimit: largest, totalLimit: total);
-    expect(BackupService.validate(ok.bytes, entryLimit: largest, totalLimit: total).manifest.transactions, 3);
   });
 
   test('validate rejects oversized entries, understated sizes and unknown entry names', () async {
     await seedData();
-    final zip = (await service.buildPackage(now)).bytes;
+    final zip = (await service.buildPackage(now)).file.readAsBytesSync();
     Matcher rejected(String text) => throwsA(isA<BackupException>().having((e) => e.message, 'message', contains(text)));
 
     final sizes = [for (final f in ZipDecoder().decodeBytes(zip)) f.size];
     final largest = sizes.reduce((a, b) => a > b ? a : b);
     final total = sizes.reduce((a, b) => a + b);
-    expect(() => BackupService.validate(zip, entryLimit: largest - 1), rejected('terlalu besar'));
-    expect(() => BackupService.validate(zip, totalLimit: total - 1), rejected('terlalu besar'));
-    expect(BackupService.validate(zip, entryLimit: largest, totalLimit: total).manifest.transactions, 3);
+    await expectLater(validateZip(zip, entryLimit: largest - 1), rejected('terlalu besar'));
+    await expectLater(validateZip(zip, totalLimit: total - 1), rejected('terlalu besar'));
+    expect((await validateZip(zip, entryLimit: largest, totalLimit: total)).manifest.transactions, 3);
 
     for (final name in ['evil.sh', 'attachments/sub/x.jpg', '../finbro.sqlite']) {
       final withExtra = ZipEncoder().encodeBytes(ZipDecoder().decodeBytes(zip)..add(ArchiveFile.string(name, 'x')));
-      expect(() => BackupService.validate(withExtra), rejected('tidak dikenal'), reason: name);
+      await expectLater(validateZip(withExtra), rejected('tidak dikenal'), reason: name);
     }
 
     // An attachment whose zip headers claim 16 bytes but which inflates to 1 MB.
@@ -550,7 +637,7 @@ void main() {
       }
     }
     expect(patched, 2);
-    expect(() => BackupService.validate(bombZip), rejected('rusak'));
+    await expectLater(validateZip(bombZip), rejected('rusak'));
   });
 
   test('entry whose CRC32 does not match its content is rejected', () async {
@@ -559,16 +646,29 @@ void main() {
     await seedData();
     final package = await service.buildPackage(now);
 
-    final corrupted = ZipDecoder().decodeBytes(package.bytes);
-    final attachment = corrupted.findFile('attachments/r1.jpg')!;
-    attachment.crc32 = (attachment.crc32 ?? 0) ^ 0xFFFF; // stale CRC, content untouched
-    final crcZip = ZipEncoder().encodeBytes(corrupted);
+    // ZipEncoder recomputes CRCs when re-encoding, so mutate the encoded
+    // bytes directly: every little-endian occurrence of the original CRC
+    // (local header and central directory) becomes a stale value.
+    final zipBytes = await package.file.readAsBytes();
+    final content = ZipDecoder().decodeBytes(zipBytes).findFile('attachments/r1.jpg')!;
+    final originalCrc = content.crc32!;
+    final staleCrc = originalCrc ^ 0xFFFF;
+    final patched = Uint8List.fromList(zipBytes);
+    final data = ByteData.sublistView(patched);
+    var hits = 0;
+    final needle = Uint8List(4)..buffer.asUint32List()[0] = originalCrc;
+    bool crcAt(int at) => patched[at] == needle[0] && patched[at + 1] == needle[1] &&
+        patched[at + 2] == needle[2] && patched[at + 3] == needle[3];
+    for (var i = 0; i + 4 <= patched.length; i++) {
+      if (crcAt(i)) {
+        data.setUint32(i, staleCrc, Endian.little);
+        hits++;
+      }
+    }
+    expect(hits, 2, reason: 'local header and central directory both carry the CRC');
+    final crcZip = patched;
 
     // The content itself still matches the manifest, so only the CRC catches it.
-    expect(() => BackupService.validate(crcZip), throwsA(isA<BackupException>()));
-    // Sanity check: an entry with a bad CRC but no manifest entry for it is
-    // rejected before unpacking anyway — the check must be the CRC, not the
-    // unknown-name path.
-    expect(corrupted.findFile('attachments/r1.jpg')!.name, 'attachments/r1.jpg');
+    await expectLater(validateZip(crcZip), throwsA(isA<BackupException>()));
   });
 }

@@ -140,6 +140,11 @@ class FolderBackupService {
 
   static final fileNamePattern = RegExp(r'^finbro-\d{8}-\d{6}\.finbro$');
 
+  /// Suffix of a backup still being copied into the folder; leftovers of an
+  /// interrupted copy are removed by the next successful backup.
+  static const partialSuffix = '.partial';
+  static final partialNamePattern = RegExp(r'^finbro-\d{8}-\d{6}\.finbro\.partial$');
+
   /// `finbro-YYYYMMDD-HHmmss.finbro` in local time.
   static String fileNameFor(DateTime t) {
     final l = t.isUtc ? t.toLocal() : t;
@@ -206,6 +211,21 @@ class FolderBackupService {
 
   Future<void> setKeep(int keep) => _settings.set(SettingKeys.folderBackupKeep, '$keep');
 
+  /// Stores the key for future backups (a new passphrase); a recorded
+  /// failure (e.g. [noKeyMessage]) no longer applies.
+  Future<void> setKey(BackupKey key) async {
+    await keys.write(key);
+    await _settings.remove(SettingKeys.folderBackupLastError);
+  }
+
+  /// Turns folder backups off: releases the folder and deletes the key from
+  /// this device. Files already in the folder stay (still openable with
+  /// their passphrase).
+  Future<void> disable() async {
+    await clearFolder();
+    await keys.delete();
+  }
+
   Future<String>? _inFlight;
 
   /// Lifecycle task: starts [runIfDue] without waiting for it, so app start
@@ -249,18 +269,21 @@ class FolderBackupService {
       if (!await folder.canWrite(uri)) throw const BackupException(permissionLostMessage);
 
       final package = await backups.buildPackage(now);
-      final encrypted = await EncryptedBackup.encrypt(package.bytes, key);
-      final name = fileNameFor(now);
-      final work = await (await workDir()).createTemp('finbro-folder-');
       final String written;
       try {
-        final file = File(p.join(work.path, name));
-        await file.writeAsBytes(encrypted, flush: true);
-        written = await folder.write(uri, name, file);
-      } finally {
+        final name = fileNameFor(now);
+        final work = await (await workDir()).createTemp('finbro-folder-');
         try {
-          await work.delete(recursive: true);
-        } catch (_) {}
+          final file = File(p.join(work.path, name));
+          await EncryptedBackup.encrypt(package.file, file, key);
+          written = await folder.write(uri, name, file);
+        } finally {
+          try {
+            await work.delete(recursive: true);
+          } catch (_) {}
+        }
+      } finally {
+        await package.dispose();
       }
       await _prune(uri, s.keep, written);
 
@@ -300,7 +323,7 @@ class FolderBackupService {
       final entries = await folder.list(uri);
       final victims = retentionVictims(entries.map((e) => e.name), keep, justWritten: written).toSet();
       for (final e in entries) {
-        if (!victims.contains(e.name)) continue;
+        if (!victims.contains(e.name) && !partialNamePattern.hasMatch(e.name)) continue;
         try {
           await folder.delete(e.uri);
         } catch (err, s) {

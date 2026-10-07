@@ -50,6 +50,13 @@ class HelpScreen extends StatelessWidget {
                 'Buat backup di Pengaturan → Backup & Restore dan simpan di luar HP.',
           ),
           _HelpItem(
+            icon: Icons.enhanced_encryption_outlined,
+            title: 'Backup terenkripsi otomatis',
+            body: 'Di Backup & Restore → Backup terenkripsi ke folder, pilih folder (mis. folder yang disinkronkan) '
+                'dan atur passphrase. FinBro membuat backup harian/mingguan saat aplikasi dibuka. '
+                'Passphrase tidak bisa dipulihkan; tanpa passphrase backup tidak bisa direstore.',
+          ),
+          _HelpItem(
             icon: Icons.document_scanner_outlined,
             title: 'Hasil scan',
             body: 'Hasil scan struk selalu berupa draf. Periksa nominal dan tanggal sebelum menyimpan.',

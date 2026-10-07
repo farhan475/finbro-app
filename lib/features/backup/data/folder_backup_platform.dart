@@ -59,10 +59,26 @@ class SafBackupFolderAccess implements BackupFolderAccess {
       if (!f.isDir) FolderEntry(uri: f.uri, name: f.name),
   ];
 
+  /// Pasted under a temporary `.partial` name and renamed once complete, so
+  /// a copy interrupted mid-way (process killed, WorkManager stop) never
+  /// looks like a finished backup to retention or restore.
   @override
   Future<String> write(String treeUri, String fileName, File source) async {
-    final created = await _stream.pasteLocalFile(source.path, treeUri, fileName, EncryptedBackup.mimeType);
-    return created.fileName ?? fileName;
+    final partial = await _stream.pasteLocalFile(
+      source.path,
+      treeUri,
+      '$fileName${FolderBackupService.partialSuffix}',
+      EncryptedBackup.mimeType,
+    );
+    try {
+      final done = await _util.rename(partial.uri.toString(), false, fileName);
+      return done.name;
+    } catch (_) {
+      try {
+        await _util.delete(partial.uri.toString(), false);
+      } catch (_) {}
+      rethrow;
+    }
   }
 
   @override
@@ -72,9 +88,11 @@ class SafBackupFolderAccess implements BackupFolderAccess {
   Future<void> release(String treeUri) => _util.releasePersistedPermission(treeUri, read: true, write: true);
 
   /// Lets the user pick any file (cloud providers rarely know a `.finbro`
-  /// MIME type) and copies it into [workDir]. Returns null when cancelled;
-  /// throws [BackupException] when the picker reports a size above
-  /// [EncryptedBackup.maxFileBytes] (checked again after copying).
+  /// MIME type) and copies it into a fresh temporary directory under
+  /// [workDir]; the caller deletes the returned file's parent. Returns null
+  /// when cancelled; throws [BackupException] when the picker reports a size
+  /// above [EncryptedBackup.maxFileBytes] (checked again when the header is
+  /// read).
   static Future<File?> pickEncryptedFile(Directory workDir) async {
     final picked = await AppLockGate.runExempt(() => _util.pickFile(mimeTypes: const ['*/*']));
     if (picked == null) return null;
@@ -83,7 +101,14 @@ class SafBackupFolderAccess implements BackupFolderAccess {
     }
     final dir = await workDir.createTemp('finbro-pick-');
     final dest = File('${dir.path}/picked${EncryptedBackup.extension}');
-    await _stream.copyToLocalFile(picked.uri, dest.path);
+    try {
+      await _stream.copyToLocalFile(picked.uri, dest.path);
+    } catch (_) {
+      try {
+        await dir.delete(recursive: true);
+      } catch (_) {}
+      rethrow;
+    }
     return dest;
   }
 }

@@ -16,6 +16,7 @@ import '../../../shared/widgets/fin_widgets.dart';
 import '../../security/presentation/app_lock_gate.dart';
 import '../domain/backup_service.dart';
 import '../domain/csv_export.dart';
+import 'folder_backup_section.dart';
 import 'restore_flow.dart';
 
 /// Local backups and safety snapshots with size and time, newest first.
@@ -69,7 +70,9 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     }
     if (!mounted) return;
     ref.invalidate(localBackupsProvider);
-    await _offerExternalCopy(created.package.fileName, created.package.bytes, 'application/zip');
+    final bytes = await _readBackup(created.file);
+    if (bytes == null || !mounted) return;
+    await _offerExternalCopy(p.basename(created.file.path), bytes, 'application/zip');
   });
 
   Future<void> _offerExternalCopy(String name, Uint8List bytes, String mime) async {
@@ -141,9 +144,8 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     if (!mounted || action == null) return;
     switch (action) {
       case 'restore':
-        final bytes = await _readBackup(file);
-        if (bytes == null || !mounted) return;
-        await restoreFromBytes(context, ref, bytes);
+        if (!mounted) return;
+        await restoreFromFile(context, ref, file);
       case 'save':
         final bytes = await _readBackup(file);
         if (bytes == null || !mounted) return;
@@ -198,12 +200,22 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          if (busy) ...[
-            LinearProgressIndicator(minHeight: 2, color: fin.primary),
-            const SizedBox(height: 8),
-            Text(_busy!, style: context.text.bodySmall),
-            const SizedBox(height: 8),
-          ],
+          // One slot whether busy or not: inserting children here would shift
+          // the list's indices and remount the widgets below mid-action.
+          if (busy)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  LinearProgressIndicator(minHeight: 2, color: fin.primary),
+                  const SizedBox(height: 8),
+                  Text(_busy!, style: context.text.bodySmall),
+                ],
+              ),
+            )
+          else
+            const SizedBox.shrink(),
           FinCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -237,10 +249,18 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
           ),
           const SizedBox(height: 8),
           OutlinedButton.icon(
+            onPressed: busy ? null : () => pickAndRestoreEncrypted(context, ref),
+            icon: const Icon(Icons.lock_open_outlined),
+            label: const Text('Restore backup terenkripsi (.finbro)'),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
             onPressed: busy ? null : _exportCsv,
             icon: const Icon(Icons.table_chart_outlined),
             label: const Text('Export CSV transaksi'),
           ),
+          const SizedBox(height: 16),
+          FolderBackupSection(busy: busy, run: _run),
           const SizedBox(height: 16),
           const SectionHeader('Backup di perangkat'),
           AsyncView(
