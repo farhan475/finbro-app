@@ -113,23 +113,32 @@ class _LockScreenState extends ConsumerState<LockScreen> {
       await _refreshCooldown();
       return;
     }
-    final ok = await ref.read(appLockServiceProvider).verifyPin(_pin);
-    if (!mounted) return;
-    if (ok) {
-      unawaited(_limiter.reset());
-      widget.onUnlocked();
-      return;
+    try {
+      final ok = await ref.read(appLockServiceProvider).verifyPin(_pin);
+      if (!mounted) return;
+      if (ok) {
+        unawaited(_limiter.reset());
+        widget.onUnlocked();
+        return;
+      }
+      await _limiter.recordFailure();
+      final cooldown = await _limiter.remaining();
+      if (!mounted) return;
+      HapticFeedback.heavyImpact();
+      setState(() {
+        _verifying = false;
+        _pin = '';
+        _error = cooldown != null ? null : 'PIN salah. Sisa ${_limiter.attemptsLeft} percobaan.';
+      });
+      await _refreshCooldown();
+    } on PinIntegrityException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _verifying = false;
+        _pin = '';
+        _error = e.message;
+      });
     }
-    await _limiter.recordFailure();
-    final cooldown = await _limiter.remaining();
-    if (!mounted) return;
-    HapticFeedback.heavyImpact();
-    setState(() {
-      _verifying = false;
-      _pin = '';
-      _error = cooldown != null ? null : 'PIN salah. Sisa ${_limiter.attemptsLeft} percobaan.';
-    });
-    await _refreshCooldown();
   }
 
   @override

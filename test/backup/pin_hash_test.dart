@@ -4,8 +4,9 @@ import 'package:finbro_app/core/database/app_database.dart';
 import 'package:finbro_app/core/settings/app_settings_repository.dart';
 import 'package:finbro_app/features/security/domain/app_lock_service.dart';
 import 'package:finbro_app/features/security/domain/pin_hasher.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-
 import '../security/fake_elapsed_clock.dart';
 
 void main() {
@@ -39,6 +40,8 @@ void main() {
     final db = AppDatabase.memory();
     addTearDown(db.close);
     final settings = AppSettingsRepository(db);
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     final lock = AppLockService(settings);
     await PinAttemptLimiter.instance.reset();
 
@@ -56,6 +59,44 @@ void main() {
     await lock.disable(current: '13579');
     expect(await lock.hasPin(), isFalse);
     expect(await settings.get(SettingKeys.biometricEnabled), isNull);
+  });
+
+  test('legacy verifier migrates after correct PIN on Android channel', () async {
+    final db = AppDatabase.memory();
+    addTearDown(db.close);
+    final settings = AppSettingsRepository(db);
+    final salt = PinHasher.newSalt();
+    final saltText = PinHasher.encodeSalt(salt);
+    final hash = PinHasher.hash('2468', salt);
+    await settings.set(SettingKeys.pinSalt, saltText);
+    await settings.set(SettingKeys.pinHash, hash);
+    final channel = MethodChannel('test.pin.migration');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+      channel,
+      (call) async => call.method == 'bind' ? 'binding' : null,
+    );
+    addTearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null));
+    final lock = AppLockService(settings, pinChannel: channel, android: true);
+    expect(await lock.verifyPin('2468'), isTrue);
+    expect(PinHasher.bindingPart(await settings.get(SettingKeys.pinHash) ?? ''), 'binding');
+  });
+
+  test('Android binding failure is explicit and does not unlock', () async {
+    final db = AppDatabase.memory();
+    addTearDown(db.close);
+    final settings = AppSettingsRepository(db);
+    final salt = PinHasher.newSalt();
+    final saltText = PinHasher.encodeSalt(salt);
+    await settings.set(SettingKeys.pinSalt, saltText);
+    await settings.set(SettingKeys.pinHash, PinHasher.withBinding(PinHasher.hash('2468', salt), 'bad'));
+    final channel = MethodChannel('test.pin.failure');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+      channel,
+      (call) async => false,
+    );
+    addTearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null));
+    final lock = AppLockService(settings, pinChannel: channel, android: true);
+    await expectLater(lock.verifyPin('2468'), throwsA(isA<PinIntegrityException>()));
   });
 
   test('five wrong attempts start a 30 s cooldown', () async {

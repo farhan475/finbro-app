@@ -21,6 +21,12 @@ class PinException implements Exception {
   String toString() => message;
 }
 
+/// Raised when the device-bound verifier cannot be checked. This is never
+/// treated as a wrong PIN: Android must not silently fall back to DB-only data.
+class PinIntegrityException extends PinException {
+  const PinIntegrityException(super.message);
+}
+
 /// Lock timeout choices (seconds) for SettingKeys.lockTimeoutSeconds.
 const lockTimeoutOptions = <int, String>{0: 'Segera', 60: '1 menit', 300: '5 menit'};
 const defaultLockTimeoutSeconds = 60;
@@ -57,8 +63,12 @@ final appLockServiceProvider = Provider<AppLockService>((ref) {
 final biometricAvailableProvider = FutureProvider<bool>((ref) => AppLockService.biometricAvailable());
 
 class AppLockService {
-  AppLockService(this.settings);
+  AppLockService(this.settings, {MethodChannel? pinChannel, bool? android})
+      : _pinChannelInstance = pinChannel ?? _pinChannel,
+        _android = android ?? _isAndroid;
   final AppSettingsRepository settings;
+  final MethodChannel _pinChannelInstance;
+  final bool _android;
 
   static final _auth = LocalAuthentication();
 
@@ -68,27 +78,67 @@ class AppLockService {
     return (hash?.isNotEmpty ?? false) && (salt?.isNotEmpty ?? false);
   }
 
-  /// Stores a new salted hash for [pin] (4–6 digits).
+  /// Stores a new salted hash. Android additionally binds it to a non-exportable
+  /// Keystore key before either database value is committed.
   Future<void> setPin(String pin) async {
     if (!PinHasher.isValidPin(pin)) {
       throw const PinException('PIN harus 4–6 digit angka.');
     }
     final salt = PinHasher.newSalt();
     final hash = await _hashOffThread(pin, salt);
-    // One transaction: a crash between the two writes must not leave a new
-    // salt next to the old hash (nothing would verify, permanent lockout).
+    final storedHash = await _bindHash(hash, PinHasher.encodeSalt(salt));
     await settings.db.transaction(() async {
       await settings.set(SettingKeys.pinSalt, PinHasher.encodeSalt(salt));
-      await settings.set(SettingKeys.pinHash, hash);
+      await settings.set(SettingKeys.pinHash, storedHash);
     });
     AppLogger.info('PIN app lock diperbarui');
   }
 
   Future<bool> verifyPin(String pin) async {
-    final hash = await settings.get(SettingKeys.pinHash);
+    final storedHash = await settings.get(SettingKeys.pinHash);
     final salt = await settings.get(SettingKeys.pinSalt);
-    if (hash == null || salt == null || !PinHasher.isValidPin(pin)) return false;
-    return _verifyOffThread(pin, hash, salt);
+    if (storedHash == null || salt == null || !PinHasher.isValidPin(pin)) return false;
+    final valid = await _verifyOffThread(pin, storedHash, salt);
+    if (!valid) return false;
+    if (!_android) return true;
+    final binding = PinHasher.bindingPart(storedHash);
+    if (binding == null) {
+      final migrated = await _bindHash(PinHasher.hashPart(storedHash), salt);
+      await settings.set(SettingKeys.pinHash, migrated);
+      return true;
+    }
+    await _verifyBinding(PinHasher.hashPart(storedHash), salt, binding);
+    return true;
+  }
+
+  static final _pinChannel = MethodChannel('id.finbro.app/pin_verifier');
+  static bool get _isAndroid => defaultTargetPlatform == TargetPlatform.android;
+  Future<String> _bindHash(String hash, String salt) async {
+    if (!_android) return hash;
+    try {
+      final binding = await _pinChannelInstance.invokeMethod<String>('bind', {'data': '$hash.$salt'});
+      if (binding == null || binding.isEmpty) throw const PinIntegrityException('Keystore PIN tidak tersedia.');
+      return PinHasher.withBinding(hash, binding);
+    } on PinIntegrityException {
+      rethrow;
+    } on MissingPluginException {
+      throw const PinIntegrityException('Pengamanan PIN perangkat tidak tersedia.');
+    } on PlatformException {
+      throw const PinIntegrityException('Kunci pengamanan PIN perangkat tidak valid.');
+    }
+  }
+
+  Future<void> _verifyBinding(String hash, String salt, String binding) async {
+    try {
+      final valid = await _pinChannelInstance.invokeMethod<bool>('verify', {'data': '$hash.$salt', 'binding': binding});
+      if (valid != true) throw const PinIntegrityException('Verifikasi PIN perangkat gagal.');
+    } on PinIntegrityException {
+      rethrow;
+    } on MissingPluginException {
+      throw const PinIntegrityException('Pengamanan PIN perangkat tidak tersedia.');
+    } on PlatformException {
+      throw const PinIntegrityException('Kunci pengamanan PIN perangkat tidak valid.');
+    }
   }
 
   // Static so the isolate closures capture only sendable values, never `this`.
@@ -105,9 +155,13 @@ class AppLockService {
     if (wait != null) {
       throw PinException('Terlalu banyak percobaan. Coba lagi dalam ${wait.inSeconds + 1} detik.');
     }
-    if (!await verifyPin(current)) {
-      await limiter.recordFailure();
-      throw const PinException('PIN saat ini salah.');
+    try {
+      if (!await verifyPin(current)) {
+        await limiter.recordFailure();
+        throw const PinException('PIN saat ini salah.');
+      }
+    } on PinIntegrityException {
+      rethrow;
     }
     await limiter.reset();
   }
