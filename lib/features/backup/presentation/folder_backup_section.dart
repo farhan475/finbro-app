@@ -133,7 +133,7 @@ class FolderBackupSection extends ConsumerWidget {
                           ? 'Diatur ${formatDay(key.createdAt)}'
                           : 'Belum diatur',
                 ),
-                trailing: Text(hasKey ? 'Ubah' : 'Atur', style: TextStyle(color: fin.primary)),
+                trailing: Text(hasKey ? 'Ubah' : 'Atur', style: context.text.labelLarge!.copyWith(color: fin.primary)),
                 onTap: () => _setPassphrase(context, ref, change: hasKey),
               ),
               ListTile(
@@ -148,7 +148,10 @@ class FolderBackupSection extends ConsumerWidget {
                           : status.folderName ?? 'Folder dipilih',
                   style: writable == false ? TextStyle(color: fin.negative) : null,
                 ),
-                trailing: Text(status.hasFolder ? 'Ganti' : 'Pilih', style: TextStyle(color: fin.primary)),
+                trailing: Text(
+                  status.hasFolder ? 'Ganti' : 'Pilih',
+                  style: context.text.labelLarge!.copyWith(color: fin.primary),
+                ),
                 onTap: () => _pickFolder(context, ref, hasKey: hasKey),
               ),
               Padding(
@@ -232,8 +235,9 @@ class FolderBackupSection extends ConsumerWidget {
         ],
         const SizedBox(height: 8),
         Text(
-          'Backup dienkripsi (AES-256) dengan kunci dari passphrase Anda dan berjalan otomatis saat aplikasi '
-          'dibuka bila jadwalnya tiba. Hanya file finbro-*.finbro di folder itu yang dirapikan.',
+          'Backup dienkripsi (AES-256) dengan kunci dari passphrase Anda dan berjalan otomatis bila jadwalnya '
+          'tiba: saat aplikasi dibuka, atau di latar belakang sekitar tiap 6 jam (bisa ditunda Android saat '
+          'hemat baterai). Hanya file finbro-*.finbro di folder itu yang dirapikan.',
           style: context.text.bodySmall!.copyWith(color: fin.muted),
         ),
       ],

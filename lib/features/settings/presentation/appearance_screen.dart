@@ -6,20 +6,6 @@ import '../../../core/settings/app_settings_repository.dart';
 import '../../../shared/widgets/fin_widgets.dart';
 import 'settings_widgets.dart';
 
-/// `/settings`: the settings group on its own page.
-class SettingsScreen extends StatelessWidget {
-  const SettingsScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Pengaturan')),
-    body: ListView(
-      padding: const EdgeInsets.all(16),
-      children: const [ReliabilityBanners(), SettingsGroup()],
-    ),
-  );
-}
-
 /// `/settings/appearance`: light / dark / system theme.
 class AppearanceScreen extends ConsumerWidget {
   const AppearanceScreen({super.key});

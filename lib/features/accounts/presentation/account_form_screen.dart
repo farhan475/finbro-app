@@ -75,12 +75,7 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
     final db = ref.read(databaseProvider);
     final row = await (db.select(db.exchangeRates)..where((r) => r.code.equals(c.code))).getSingleOrNull();
     if (!mounted || _currency != c) return;
-    _kurs.text = row == null ? '' : _kursText(row.rateToIdr);
-  }
-
-  static String _kursText(double rate) {
-    final s = rate.toStringAsFixed(rate == rate.roundToDouble() ? 0 : 2);
-    return s.replaceAll('.', ',');
+    _kurs.text = row == null ? '' : formatRateInput(row.rateToIdr);
   }
 
   @override
@@ -98,7 +93,7 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
     final opening = parseMoney(_opening.text, _currency) ?? 0;
     try {
       if (_currency != Currency.idr) {
-        await _upsertKurs(_currency, _parseKurs(_kurs.text)!);
+        await _upsertKurs(_currency, parseRate(_kurs.text)!);
       }
       if (_isEdit) {
         await repo.update(
@@ -141,16 +136,11 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
     );
   }
 
-  static double? _parseKurs(String input) {
-    final cleaned = input.trim().replaceAll(RegExp(r'[^0-9.,]'), '').replaceAll(',', '.');
-    return cleaned.isEmpty ? null : double.tryParse(cleaned);
-  }
-
   int? get _idrPreview {
     if (_currency == Currency.idr) return null;
-    final rate = _parseKurs(_kurs.text);
+    final rate = parseRate(_kurs.text);
     final opening = parseMoney(_opening.text, _currency);
-    if (rate == null || rate <= 0 || opening == null) return null;
+    if (rate == null || rate <= 0 || opening == null || opening == 0) return null;
     return toIdr(opening, _currency, rate);
   }
 
@@ -214,6 +204,39 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
                   ),
               ],
             ),
+            const SectionHeader('Mata uang'),
+            DropdownButtonFormField<Currency>(
+              initialValue: _currency,
+              isExpanded: true,
+              items: [
+                for (final c in Currency.values)
+                  DropdownMenuItem(
+                    value: c,
+                    child: Text('${c.symbol}  ${c.code} · ${c.displayName}', overflow: TextOverflow.ellipsis),
+                  ),
+              ],
+              onChanged: (c) {
+                if (c != null && c != _currency) _setCurrency(c);
+              },
+            ),
+            if (_currency != Currency.idr) ...[
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _kurs,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(
+                  labelText: 'Kurs 1 ${_currency.code} (Rp)',
+                  hintText: 'mis. 16.250',
+                  prefixText: 'Rp ',
+                  helperText: 'Ikut tersimpan di Kurs Mata Uang.',
+                ),
+                validator: (v) {
+                  final r = parseRate(v ?? '');
+                  if (r == null || r <= 0) return 'Masukkan kurs yang valid (> 0)';
+                  return null;
+                },
+              ),
+            ],
             const SizedBox(height: 20),
             MoneyField(controller: _opening, label: 'Saldo awal', allowZero: true, currency: _currency),
             const SizedBox(height: 6),
@@ -223,45 +246,20 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
                   : 'Saldo saat mulai mencatat. Saldo selanjutnya dihitung dari transaksi.',
               style: context.text.bodySmall,
             ),
-            const SectionHeader('Mata uang'),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final c in Currency.values)
-                  ChoiceChip(
-                    selected: _currency == c,
-                    onSelected: (_) => _setCurrency(c),
-                    label: Text(
-                      '${c.symbol} ${c.code}',
-                      style: context.text.labelMedium!.copyWith(color: _currency == c ? fin.onPrimary : fin.text),
-                    ),
+            ListenableBuilder(
+              listenable: Listenable.merge([_opening, _kurs]),
+              builder: (context, _) {
+                final preview = _idrPreview;
+                if (preview == null) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'Saldo awal ≈ ${formatRupiah(preview)}',
+                    style: context.text.bodySmall!.copyWith(color: fin.muted),
                   ),
-              ],
+                );
+              },
             ),
-            if (_currency != Currency.idr) ...[
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _kurs,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: InputDecoration(
-                  labelText: 'Kurs (1 ${_currency.code} = ... Rp)',
-                  hintText: 'mis. 16250',
-                  prefixText: 'Rp ',
-                ),
-                onChanged: (_) => setState(() {}),
-                validator: (v) {
-                  final r = _parseKurs(v ?? '');
-                  if (r == null || r <= 0) return 'Masukkan kurs yang valid (> 0)';
-                  return null;
-                },
-              ),
-              if (_idrPreview != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text('≈ ${formatRupiah(_idrPreview!)}', style: context.text.bodySmall),
-                ),
-            ],
             const SectionHeader('Ikon (opsional)'),
             Wrap(
               spacing: 8,

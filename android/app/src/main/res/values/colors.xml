@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#000000</color>
+    <!-- Home-screen widget, light (FinColors.light). -->
+    <color name="finbro_widget_surface">#FFFFFFFF</color>
+    <color name="finbro_widget_border">#FFE8EAEE</color>
+    <color name="finbro_widget_text">#FF111111</color>
+    <color name="finbro_widget_muted">#FF667085</color>
+    <color name="finbro_widget_positive">#FF16A34A</color>
+    <color name="finbro_widget_warning">#FFD97706</color>
+    <color name="finbro_widget_negative">#FFDC2626</color>
 </resources>

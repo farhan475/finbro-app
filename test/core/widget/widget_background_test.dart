@@ -55,6 +55,58 @@ void main() {
       expect(s.masked, isFalse);
       expect(s.balanceText, 'Rp 15.000');
       expect(s.updatedText, 'Diperbarui 3 Okt 09:05');
+      expect(s.chart, [0, 15000, 15000, 15000], reason: 'month start, then 1–3 Okt, ending at the balance');
+    });
+
+    test('details for taller widgets: change, income/expense, ATS, empty budget and schedule', () async {
+      await (db.update(db.accounts)..where((a) => a.id.equals('a1'))).write(const AccountsCompanion(openingBalance: Value(100000)));
+      await addIncome('t1', 15000, DateTime(2026, 10, 1));
+      final d = (await computeWidgetSnapshot(db, now: now)).details!;
+      expect(d.changeText, '↑ +15% dari bulan lalu');
+      expect(d.changeTone, WidgetTone.positive);
+      expect(d.incomeText, 'Rp 15.000');
+      expect(d.expenseText, 'Rp 0');
+      expect(d.budgetText, 'Belum ada budget bulan ini');
+      expect(d.upcomingText, 'Tidak ada jadwal 14 hari ke depan');
+      expect(d.availableTone, WidgetTone.neutral);
+    });
+
+    test('details: highest-usage budget and an overdue schedule in the account currency, toned negative', () async {
+      final created = DateTime(2026, 10, 1);
+      for (final (id, name) in [('f', 'Food'), ('tr', 'Transport')]) {
+        await db.into(db.categories).insert(CategoriesCompanion.insert(
+          id: id, name: name, type: CategoryType.expense, createdAt: created, updatedAt: created));
+      }
+      for (final (id, category, amount) in [('b1', 'tr', 100000), ('b2', 'f', 50000)]) {
+        await db.into(db.budgets).insert(BudgetsCompanion.insert(
+          id: id, categoryId: category, periodStart: created, periodEnd: DateTime(2026, 10, 31),
+          amount: amount, createdAt: created, updatedAt: created));
+      }
+      for (final (id, category, amount) in [('e1', 'f', 60000), ('e2', 'tr', 10000)]) {
+        await db.into(db.transactions).insert(TransactionsCompanion.insert(
+          id: id, type: TransactionType.expense, amount: amount, accountId: 'a1', categoryId: Value(category),
+          transactionAt: DateTime(2026, 10, 2), createdAt: created, updatedAt: created));
+      }
+      await db.into(db.recurringRules).insert(RecurringRulesCompanion.insert(
+        id: 'r1', type: TransactionType.expense, name: 'Internet', amount: 385000, accountId: 'a1', categoryId: 'tr',
+        frequency: RecurringFrequency.monthly, startDate: created, createdAt: created, updatedAt: created));
+      await db.into(db.recurringInstances).insert(RecurringInstancesCompanion.insert(
+        id: 'i1', recurringRuleId: 'r1', dueDate: created, amount: 385000, status: RecurringStatus.scheduled,
+        createdAt: created, updatedAt: created));
+
+      final d = (await computeWidgetSnapshot(db, now: now)).details!;
+      expect(d.budgetText, 'Food · 120% · Over budget');
+      expect(d.budgetTone, WidgetTone.negative);
+      expect(d.upcomingText, 'Internet · Terlambat 2 hari · -Rp 385.000');
+      expect(d.upcomingTone, WidgetTone.negative);
+    });
+
+    test('masked snapshots carry no chart and no details', () async {
+      await settings.setBool(SettingKeys.hideBalance, true);
+      final s = await computeWidgetSnapshot(db, now: now);
+      expect(s.chart, isEmpty);
+      expect(s.details, isNull);
+      expect(s.toArguments().keys, isNot(contains('incomeText')));
     });
 
     test('rows dated after now are not counted yet', () async {
@@ -109,6 +161,26 @@ void main() {
       await settings.setBool(SettingKeys.hideBalance, false);
       await settle();
       expect(rendered.last.balanceText, 'Rp 15.000');
+    });
+
+    test('a new budget or schedule updates the taller widget rows', () async {
+      final created = DateTime(2026, 10, 1);
+      await db.into(db.categories).insert(CategoriesCompanion.insert(
+        id: 'f', name: 'Food', type: CategoryType.expense, createdAt: created, updatedAt: created));
+      await db.into(db.budgets).insert(BudgetsCompanion.insert(
+        id: 'b1', categoryId: 'f', periodStart: created, periodEnd: DateTime(2026, 10, 31),
+        amount: 50000, createdAt: created, updatedAt: created));
+      await settle();
+      expect(rendered.last.details!.budgetText, 'Food · 0% · Normal');
+
+      await db.into(db.recurringRules).insert(RecurringRulesCompanion.insert(
+        id: 'r1', type: TransactionType.expense, name: 'Internet', amount: 385000, accountId: 'a1', categoryId: 'f',
+        frequency: RecurringFrequency.monthly, startDate: created, createdAt: created, updatedAt: created));
+      await db.into(db.recurringInstances).insert(RecurringInstancesCompanion.insert(
+        id: 'i1', recurringRuleId: 'r1', dueDate: DateTime(2026, 10, 4), amount: 385000,
+        status: RecurringStatus.scheduled, createdAt: created, updatedAt: created));
+      await settle();
+      expect(rendered.last.details!.upcomingText, 'Internet · Besok · -Rp 385.000');
     });
 
     test('unrelated settings writes do not re-send an unchanged snapshot; refresh always does', () async {

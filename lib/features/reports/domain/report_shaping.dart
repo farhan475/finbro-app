@@ -153,15 +153,6 @@ Period previousComparable(Period current, ReportScope scope, DateTime now) {
   return Period(prevStart, end);
 }
 
-/// Signed percent change label: `+12%`, `-5%`, `0%`, or `N/A` when there is
-/// no previous value (03 §17: never show a fake percentage).
-String formatChange(double? percent) {
-  if (percent == null || percent.isNaN || percent.isInfinite) return 'N/A';
-  final rounded = percent.round();
-  if (rounded == 0) return '0%';
-  return '${rounded > 0 ? '+' : ''}${formatPercent(percent)}';
-}
-
 /// Difference of two percentages in percentage points (`+3,5 pp`), or `N/A`
 /// if either side is unavailable.
 String formatPointChange(double? current, double? previous) {

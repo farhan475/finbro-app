@@ -81,6 +81,16 @@ class BudgetUsageItem {
   );
 }
 
+/// One open recurring occurrence with its rule (Home "Upcoming", widget).
+class UpcomingRecurring {
+  const UpcomingRecurring(this.instance, this.rule);
+  final RecurringInstance instance;
+  final RecurringRule rule;
+}
+
+/// Horizon of the Home "Upcoming" list and the widget's next-schedule row.
+const upcomingWindowDays = 14;
+
 /// §4 breakdown so the UI can explain the number.
 class AvailableToSpend {
   const AvailableToSpend({
@@ -417,6 +427,44 @@ class FinanceService {
           expense: r.read<int>('expense'),
         ),
     };
+  }
+
+  /// Total Balance through the month of [now], in rupiah: the balance at the
+  /// month start, then one point per day up to today (Home sparkline and the
+  /// home-screen widget chart). Derived from the current total and the
+  /// month's confirmed income/expense; transfers net to zero.
+  Future<List<int>> monthBalancePath(DateTime now) async {
+    final month = Period.month(now);
+    final total = await totalBalance();
+    final net = {
+      for (final e in (await dailyTotals(month)).entries) dateOnly(e.key): e.value.income - e.value.expense,
+    };
+    final today = dateOnly(now);
+    final running = <int>[];
+    var sum = 0;
+    for (var d = month.start; !d.isAfter(today) && d.isBefore(month.end); d = DateTime(d.year, d.month, d.day + 1)) {
+      sum += net[d] ?? 0;
+      running.add(sum);
+    }
+    final start = total - sum;
+    return [start, for (final r in running) start + r];
+  }
+
+  /// Open (scheduled/pending) recurring instances due within the next
+  /// [upcomingWindowDays] days of [now], including overdue ones, soonest first.
+  Future<List<UpcomingRecurring>> upcomingRecurring(DateTime now, {int limit = 5}) async {
+    final horizon = dateOnly(now).add(const Duration(days: upcomingWindowDays));
+    final i = db.recurringInstances;
+    final r = db.recurringRules;
+    final rows = await (db.select(i).join([innerJoin(r, r.id.equalsExp(i.recurringRuleId))])
+          ..where(
+            i.status.isInValues(const [RecurringStatus.scheduled, RecurringStatus.pending]) &
+                i.dueDate.isSmallerOrEqualValue(sqlDate(horizon)),
+          )
+          ..orderBy([OrderingTerm.asc(i.dueDate), OrderingTerm.asc(r.name)])
+          ..limit(limit))
+        .get();
+    return [for (final row in rows) UpcomingRecurring(row.readTable(i), row.readTable(r))];
   }
 
   Future<int> _expenseWhere(Period p, String categoryFilter) => _scalar(

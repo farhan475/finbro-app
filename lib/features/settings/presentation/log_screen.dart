@@ -121,13 +121,15 @@ class _LogScreenState extends ConsumerState<LogScreen> {
                     ),
                     for (final line in report.summary) Text('• $line', style: context.text.bodySmall),
                   ],
+                  const SizedBox(height: 12),
                   Wrap(
                     spacing: 8,
+                    runSpacing: 8,
                     children: [
-                      TextButton(
+                      OutlinedButton.icon(
                         onPressed: _checking ? null : _checkNow,
-                        style: TextButton.styleFrom(foregroundColor: fin.text),
-                        child: Text(_checking ? 'Memeriksa…' : 'Periksa sekarang'),
+                        icon: const Icon(Icons.fact_check_outlined, size: 18),
+                        label: Text(_checking ? 'Memeriksa…' : 'Periksa sekarang'),
                       ),
                       if (report != null && report.orphanFiles.isNotEmpty)
                         TextButton(

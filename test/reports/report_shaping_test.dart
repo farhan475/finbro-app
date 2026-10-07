@@ -1,6 +1,7 @@
 import 'package:finbro_app/core/database/seed.dart';
 import 'package:finbro_app/core/finance/finance_service.dart';
 import 'package:finbro_app/core/formatting/dates.dart';
+import 'package:finbro_app/core/formatting/money.dart';
 import 'package:finbro_app/features/reports/domain/report_shaping.dart';
 import 'package:flutter_test/flutter_test.dart';
 

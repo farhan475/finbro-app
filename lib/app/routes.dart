@@ -36,7 +36,6 @@ abstract final class Routes {
   static const statementImport = '/import';
 
   // Settings / reliability
-  static const settings = '/settings';
   static const backup = '/settings/backup';
   static const security = '/settings/security';
   static const log = '/settings/log';

@@ -63,3 +63,12 @@ String formatMonth(DateTime d) => _month.format(d);
 String formatMonthShort(DateTime d) => _monthShort.format(d);
 String formatTime(DateTime d) => _time.format(d);
 String formatWeekday(DateTime d) => _weekday.format(d);
+
+/// `Terlambat 2 hari`, `Hari ini`, `Besok`, `H-5`.
+String dueLabel(DateTime due, DateTime today) {
+  final days = dateOnly(due).difference(dateOnly(today)).inDays;
+  if (days < 0) return 'Terlambat ${-days} hari';
+  if (days == 0) return 'Hari ini';
+  if (days == 1) return 'Besok';
+  return 'H-$days';
+}

@@ -12,7 +12,6 @@ import '../../../core/providers.dart';
 import '../../../core/settings/app_settings_repository.dart';
 import '../../../shared/widgets/category_icon.dart';
 import '../../../shared/widgets/fin_widgets.dart';
-import '../../reports/domain/report_shaping.dart';
 import '../../reports/presentation/widgets/report_charts.dart';
 import '../../settings/presentation/settings_widgets.dart';
 import '../data/dashboard_providers.dart';
@@ -25,15 +24,6 @@ String greetingFor(DateTime now) {
   if (h >= 4 && h < 11) return 'Good Morning';
   if (h >= 11 && h < 18) return 'Good Afternoon';
   return 'Good Evening';
-}
-
-/// Balance at the start of the month and its daily path, derived from the
-/// current total and the month's cumulative confirmed income/expense
-/// (transfers net to zero). Returns `(start, path)`.
-(int, List<int>) balancePath(int totalBalance, List<CashFlowPoint> points) {
-  final net = points.isEmpty ? 0 : points.last.income - points.last.expense;
-  final start = totalBalance - net;
-  return (start, [start, for (final p in points) start + p.income - p.expense]);
 }
 
 /// Dashboard (06-ux §9, layout from the UI reference): balance card with
@@ -176,8 +166,8 @@ class _BalanceCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final fin = context.fin;
     final hidden = ref.watch(hideBalanceProvider);
-    final points = ref.watch(homeCashFlowProvider).value ?? const <CashFlowPoint>[];
-    final (start, path) = balancePath(overview.totalBalance, points);
+    final path = ref.watch(homeBalancePathProvider).value ?? [overview.totalBalance];
+    final start = path.first;
     final change = start > 0 ? percentChange(overview.totalBalance, start) : null;
     String money(int v) => hidden ? 'Rp ••••••' : formatRupiah(v);
 
@@ -311,17 +301,37 @@ class _FlowFigure extends StatelessWidget {
 }
 
 /// Compact Available to Spend row; tap explains the formula (03 §4).
-class _AvailableToSpend extends StatelessWidget {
+class _AvailableToSpend extends ConsumerWidget {
   const _AvailableToSpend({required this.overview});
   final HomeOverview overview;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final fin = context.fin;
     final value = overview.available.value;
+    // Follows the Home eye toggle: ATS is derived from the balance it hides.
+    final hidden = ref.watch(hideBalanceProvider);
+    final shown = hidden ? 'Rp ••••••' : formatRupiah(value);
+    // Large font scales: the amount moves under the label instead of squeezing it ("Availabl/e to").
+    final stacked = MediaQuery.textScalerOf(context).scale(10) > 13;
+    final amount = Text(
+      shown,
+      maxLines: 1,
+      style: context.text.titleMedium!.copyWith(
+        color: !hidden && value < 0 ? fin.negative : null,
+        fontFeatures: const [FontFeature.tabularFigures()],
+      ),
+    );
+    final label = Row(
+      children: [
+        Flexible(child: Text('Available to Spend', style: context.text.bodyMedium, maxLines: 2)),
+        const SizedBox(width: 4),
+        Icon(Icons.info_outline, size: 14, color: fin.muted),
+      ],
+    );
     return Semantics(
       button: true,
-      label: 'Available to Spend ${formatRupiah(value)}. Ketuk untuk rincian.',
+      label: hidden ? 'Available to Spend disembunyikan. Ketuk untuk rincian.' : 'Available to Spend $shown. Ketuk untuk rincian.',
       excludeSemantics: true,
       child: FinCard(
         onTap: () => showAvailableBreakdownSheet(context, overview.available),
@@ -335,23 +345,21 @@ class _AvailableToSpend extends StatelessWidget {
               child: Icon(Icons.savings_outlined, size: 20, color: fin.accentText),
             ),
             const SizedBox(width: 12),
-            Expanded(
-              child: Row(
-                children: [
-                  Flexible(child: Text('Available to Spend', style: context.text.bodyMedium, maxLines: 2)),
-                  const SizedBox(width: 4),
-                  Icon(Icons.info_outline, size: 14, color: fin.muted),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              formatRupiah(value),
-              style: context.text.titleMedium!.copyWith(
-                color: value < 0 ? fin.negative : null,
-                fontFeatures: const [FontFeature.tabularFigures()],
-              ),
-            ),
+            if (stacked)
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    label,
+                    FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: amount),
+                  ],
+                ),
+              )
+            else ...[
+              Expanded(child: label),
+              const SizedBox(width: 8),
+              amount,
+            ],
           ],
         ),
       ),
@@ -418,6 +426,7 @@ class _AccountsStrip extends ConsumerWidget {
                 separatorBuilder: (_, _) => const SizedBox(width: 8),
                 itemBuilder: (context, i) {
                   final b = o.balances[i];
+                  final currency = Currency.fromCode(b.account.currency);
                   return SizedBox(
                     width: 160,
                     child: FinCard(
@@ -446,8 +455,13 @@ class _AccountsStrip extends ConsumerWidget {
                                   fit: BoxFit.scaleDown,
                                   alignment: Alignment.centerLeft,
                                   child: hidden
-                                      ? Text('Rp ••••', style: context.text.bodySmall!.copyWith(color: fin.text))
-                                      : AmountText(b.balance, alertNegative: true, style: context.text.bodySmall!.copyWith(color: fin.text)),
+                                      ? Text('${currency.symbol} ••••', style: context.text.bodySmall!.copyWith(color: fin.text))
+                                      : AmountText(
+                                          b.balance,
+                                          currency: currency,
+                                          alertNegative: true,
+                                          style: context.text.bodySmall!.copyWith(color: fin.text),
+                                        ),
                                 ),
                               ],
                             ),

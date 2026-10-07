@@ -80,4 +80,38 @@ void main() {
     expect(find.textContaining('Impor 1 transaksi'), findsOneWidget);
     await unmount(tester);
   });
+
+  testWidgets('with several accounts the file buttons wait for the chosen target account', (tester) async {
+    final now = DateTime(2026, 10, 2, 10);
+    await db.into(db.accounts).insert(AccountsCompanion.insert(
+      id: 'acc-mandiri', name: 'Mandiri', type: AccountType.bank, createdAt: now, updatedAt: now,
+    ));
+    tester.view.physicalSize = const Size(800, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(ProviderScope(
+      overrides: [databaseProvider.overrideWithValue(db)],
+      child: MaterialApp(theme: buildTheme(Brightness.light), home: const StatementImportEntryScreen()),
+    ));
+    for (var i = 0; i < 6; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pump();
+    }
+
+    bool enabled(String label) =>
+        tester.widget<ButtonStyleButton>(find.ancestor(of: find.text(label), matching: find.bySubtype<ButtonStyleButton>())).enabled;
+
+    // Before: both buttons were live and called accounts.single → StateError.
+    expect(enabled('Pilih file CSV'), isFalse);
+    expect(enabled('Pilih file PDF mutasi'), isFalse);
+
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Mandiri').last);
+    await tester.pumpAndSettle();
+
+    expect(enabled('Pilih file CSV'), isTrue);
+    expect(enabled('Pilih file PDF mutasi'), isTrue);
+    await unmount(tester);
+  });
 }

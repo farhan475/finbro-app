@@ -59,7 +59,7 @@ class NotificationSettingsScreen extends ConsumerWidget {
           final time = parseTimeOfDay(s[SettingKeys.dailyCheckTime]);
           final fin = context.fin;
           return ListView(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
             children: [
               Text(
                 'Semua pengingat adalah notifikasi lokal dan tetap berjalan tanpa internet.',
@@ -213,10 +213,15 @@ class _ExactRemindersCardState extends ConsumerState<_ExactRemindersCard> {
               subtitle: allowed == false
                   ? const Text('Tanpa izin "Alarm & pengingat", pengingat bisa terlambat beberapa menit.')
                   : null,
-              trailing: allowed == false
-                  ? TextButton(onPressed: _requestPermission, child: const Text('Izinkan'))
-                  : null,
             ),
+            if (allowed == false) ...[
+              OutlinedButton.icon(
+                onPressed: _requestPermission,
+                icon: const Icon(Icons.alarm_on_outlined, size: 18),
+                label: const Text('Izinkan alarm tepat waktu'),
+              ),
+              const SizedBox(height: 8),
+            ],
             Text(
               'Alarm tepat waktu sedikit lebih boros baterai. Beberapa merek HP (Xiaomi, Oppo, Vivo, '
               'Realme) tetap bisa menahan notifikasi bila FinBro dibatasi penghemat baterai; lihat Bantuan.',

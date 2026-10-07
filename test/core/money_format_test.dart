@@ -56,6 +56,35 @@ void main() {
     });
   });
 
+  group('parseRate', () {
+    test("Indonesian grouping: '.' is thousands, ',' is decimal", () {
+      expect(parseRate('16.250'), 16250, reason: 'was read as 16,25 before');
+      expect(parseRate('Rp 1.234.567'), 1234567);
+      expect(parseRate('16.250,5'), 16250.5);
+      expect(parseRate('105,25'), 105.25);
+      expect(parseRate('16250'), 16250);
+    });
+
+    test('a lone dot that is not a thousands group is a decimal mark', () {
+      expect(parseRate('16250.5'), 16250.5);
+      expect(parseRate('0.5'), 0.5);
+    });
+
+    test('malformed or empty input is rejected', () {
+      expect(parseRate(''), isNull);
+      expect(parseRate('Rp'), isNull);
+      expect(parseRate('1,2,3'), isNull);
+      expect(parseRate('1.2.3'), isNull);
+      expect(parseRate('1,5.000'), isNull);
+    });
+
+    test('round-trips formatRateInput', () {
+      for (final r in [16250.0, 105.25, 0.5, 1234567.89]) {
+        expect(parseRate(formatRateInput(r)), r);
+      }
+    });
+  });
+
   group('currencyFromCode', () {
     test('case-insensitive lookup', () {
       expect(currencyFromCode('usd'), Currency.usd);

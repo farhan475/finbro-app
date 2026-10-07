@@ -1,14 +1,19 @@
 package id.finbro.app
 
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
 
 // FlutterFragmentActivity is required by local_auth (biometric prompt).
 class MainActivity : FlutterFragmentActivity() {
+    /** Kotlin→Dart side of [WidgetChannel] on the app engine (`open`). */
+    private var widgetEvents: MethodChannel? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Financial data: keep it out of screenshots, screen recording and the
@@ -21,6 +26,14 @@ class MainActivity : FlutterFragmentActivity() {
             if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(false)
         }
         BackgroundSyncWorker.schedule(this)
+        // Cold start from a widget section: Dart reads it after its first frame.
+        captureWidgetTarget(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (captureWidgetTarget(intent)) widgetEvents?.invokeMethod("open", null)
     }
 
     override fun onStart() {
@@ -35,9 +48,19 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        ClockChannel.register(flutterEngine.dartExecutor.binaryMessenger, this)
-        PinVerifierChannel.register(flutterEngine.dartExecutor.binaryMessenger, this)
-        WidgetChannel.register(flutterEngine.dartExecutor.binaryMessenger, this)
+        val messenger = flutterEngine.dartExecutor.binaryMessenger
+        ClockChannel.register(messenger, this)
+        PinVerifierChannel.register(messenger, this)
+        WidgetChannel.register(messenger, this)
+        widgetEvents = MethodChannel(messenger, WidgetChannel.NAME)
+    }
+
+    /** Stores the widget section of [intent] (once: the extra is removed). */
+    private fun captureWidgetTarget(intent: Intent?): Boolean {
+        val target = intent?.getStringExtra(FinBroWidgetProvider.EXTRA_TARGET) ?: return false
+        intent.removeExtra(FinBroWidgetProvider.EXTRA_TARGET)
+        pendingWidgetTarget = target
+        return true
     }
 
     companion object {
@@ -45,5 +68,11 @@ class MainActivity : FlutterFragmentActivity() {
         @Volatile
         var visible = false
             private set
+
+        @Volatile
+        private var pendingWidgetTarget: String? = null
+
+        /** The widget section the app was last opened from, cleared on read. */
+        fun takeWidgetTarget(): String? = pendingWidgetTarget.also { pendingWidgetTarget = null }
     }
 }

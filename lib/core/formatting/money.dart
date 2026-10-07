@@ -35,6 +35,15 @@ String formatPercent(double? value, {int decimals = 0}) {
   return '${(decimals == 0 ? _percent0 : _percent1).format(value)}%';
 }
 
+/// Signed percent change label: `+12%`, `-5%`, `0%`, or `N/A` when there is
+/// no previous value (03 §17: never show a fake percentage).
+String formatChange(double? percent) {
+  if (percent == null || percent.isNaN || percent.isInfinite) return 'N/A';
+  final rounded = percent.round();
+  if (rounded == 0) return '0%';
+  return '${rounded > 0 ? '+' : ''}${formatPercent(percent)}';
+}
+
 /// Parses user text such as `1.250.000`, `Rp 35.000`, `35000` into rupiah.
 /// Returns null when no digits are present.
 int? parseRupiah(String input) {
@@ -108,6 +117,37 @@ final _grouped2 = NumberFormat('#,##0.00', 'id_ID');
 
 /// `1 USD = Rp 16.250` style label; [rate] is rupiah per 1 unit of [c].
 String formatRate(double rate, Currency c) => '1 ${c.code} = ${formatRupiah(rate.round())}';
+
+final _rateInput = NumberFormat('#,##0.##', 'id_ID');
+
+/// Kurs as shown in an editable rate field: `16.250`, `105,25`.
+String formatRateInput(double rate) => _rateInput.format(rate);
+
+/// Parses a typed kurs (rupiah per 1 unit) in Indonesian notation: '.' groups
+/// thousands and ',' is the decimal mark (`16.250` → 16250, `16.250,5`,
+/// `105,25`). A lone '.' that does not start a 3-digit group is read as a
+/// decimal mark (`16250.5`, `0.5`). Null when empty or malformed.
+double? parseRate(String input) {
+  final raw = input.replaceAll(RegExp(r'[^0-9.,]'), '');
+  if (!raw.contains(RegExp(r'\d'))) return null;
+  final commaParts = raw.split(',');
+  if (commaParts.length > 2 || (commaParts.length == 2 && commaParts[1].contains('.'))) return null;
+  var whole = commaParts[0];
+  var frac = commaParts.length == 2 ? commaParts[1] : '';
+  final groups = whole.split('.');
+  if (groups.length > 1) {
+    final grouped = groups.first.isNotEmpty && groups.first.length <= 3 && groups.skip(1).every((g) => g.length == 3);
+    if (grouped) {
+      whole = groups.join();
+    } else if (groups.length == 2 && frac.isEmpty && commaParts.length == 1) {
+      whole = groups[0];
+      frac = groups[1];
+    } else {
+      return null;
+    }
+  }
+  return double.tryParse('${whole.isEmpty ? '0' : whole}.${frac.isEmpty ? '0' : frac}');
+}
 
 /// Null-safe lookup by [Currency.code]; case-insensitive, null for
 /// null/unknown codes.

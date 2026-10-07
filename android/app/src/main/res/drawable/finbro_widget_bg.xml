@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Home card surface: 18dp radius, 1dp border; colors follow day/night. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <corners android:radius="16dp" />
-    <solid android:color="#CC101828" />
+    <corners android:radius="18dp" />
+    <solid android:color="@color/finbro_widget_surface" />
+    <stroke
+        android:width="1dp"
+        android:color="@color/finbro_widget_border" />
 </shape>

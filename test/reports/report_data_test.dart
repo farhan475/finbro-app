@@ -158,15 +158,17 @@ void main() {
     expect([for (final g in goals) g.goal.id], ['high', 'mid-old']);
   });
 
-  test('dashboard cash flow is cumulative up to today', () async {
+  test('dashboard balance path: month start, then one point per day up to today', () async {
     await income(5000000, DateTime(2026, 9, 1, 9));
     await expense(200000, DateTime(2026, 9, 3));
     await expense(999999, DateTime(2026, 9, 20)); // future-dated this month
     final c = container();
-    final points = await readAsync(c, homeCashFlowProvider);
-    expect(points, hasLength(15));
-    expect(points.last.income, 5000000);
-    expect(points.last.expense, 200000);
+    final path = await readAsync(c, homeBalancePathProvider);
+    expect(path, hasLength(16)); // start + 1..15 Sep
+    expect(path[1] - path[0], 5000000);
+    expect(path[3] - path[0], 4800000);
+    expect(path.last, await FinanceService(db, clock: () => now).totalBalance(), reason: 'ends at the Total Balance');
+    expect(path.last - path.first, 4800000, reason: 'future-dated rows stay out');
   });
 
   group('financial health panel', () {

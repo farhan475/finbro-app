@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,6 +9,7 @@ import '../../../app/theme/app_theme.dart';
 import '../../../core/formatting/dates.dart';
 import '../../../core/providers.dart';
 import '../../../core/settings/app_settings_repository.dart';
+import '../../../core/widget/widget_service.dart';
 import '../../../shared/widgets/fin_widgets.dart';
 import '../../backup/domain/integrity_check.dart';
 import '../../security/domain/app_lock_service.dart';
@@ -55,7 +58,7 @@ class NavTile extends StatelessWidget {
   );
 }
 
-/// "Pengaturan" group shared by the More tab and `/settings`.
+/// "Pengaturan" group of the Lainnya (More) tab.
 class SettingsGroup extends ConsumerWidget {
   const SettingsGroup({super.key});
 
@@ -75,6 +78,7 @@ class SettingsGroup extends ConsumerWidget {
           subtitle: themeModeLabels[settings[SettingKeys.themeMode]] ?? themeModeLabels['system'],
           route: SettingsPaths.appearance,
         ),
+        if (Platform.isAndroid) const _WidgetTile(),
         NavTile(
           icon: Icons.lock_outline,
           title: 'Keamanan',
@@ -96,8 +100,33 @@ class SettingsGroup extends ConsumerWidget {
   }
 }
 
+/// "Widget layar utama": opens the launcher's add-widget dialog.
+class _WidgetTile extends StatelessWidget {
+  const _WidgetTile();
+
+  @override
+  Widget build(BuildContext context) => ListTile(
+    leading: Icon(Icons.widgets_outlined, color: context.fin.text),
+    title: const Text('Widget layar utama', maxLines: 2, overflow: TextOverflow.ellipsis),
+    subtitle: const Text('Total Balance + grafik bulan ini', maxLines: 1, overflow: TextOverflow.ellipsis),
+    trailing: Icon(Icons.add, color: context.fin.muted),
+    onTap: () async {
+      final shown = await requestPinWidget();
+      if (!context.mounted) return;
+      // Some launchers (HyperOS/MIUI without the "home screen shortcuts"
+      // permission) accept the request but silently drop it.
+      showSnack(
+        context,
+        shown
+            ? 'Konfirmasi di layar utama. Bila widget tidak muncul, tahan layar utama → Widget → FinBro.'
+            : 'Tahan layar utama → Widget → FinBro untuk menambahkannya.',
+      );
+    },
+  );
+}
+
 /// Integrity problems (after abnormal termination/restore) and the gentle
-/// backup reminder. Shown on Home, More and Settings; each visible card
+/// backup reminder. Shown on Home and Lainnya; each visible card
 /// carries its own bottom gap so callers need no conditional spacing.
 class ReliabilityBanners extends ConsumerWidget {
   const ReliabilityBanners({super.key, this.showLogAction = true});

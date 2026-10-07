@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Home-screen widget, dark (FinColors.dark). -->
+    <color name="finbro_widget_surface">#FF12151A</color>
+    <color name="finbro_widget_border">#FF242932</color>
+    <color name="finbro_widget_text">#FFF5F5F5</color>
+    <color name="finbro_widget_muted">#FFA1A1AA</color>
+    <color name="finbro_widget_positive">#FF22C55E</color>
+    <color name="finbro_widget_warning">#FFF59E0B</color>
+    <color name="finbro_widget_negative">#FFEF4444</color>
+</resources>

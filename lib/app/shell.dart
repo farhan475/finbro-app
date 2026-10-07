@@ -158,7 +158,18 @@ class _NavItem extends StatelessWidget {
               children: [
                 Icon(selected ? selectedIcon : icon, color: color, size: 22),
                 const SizedBox(height: 2),
-                Text(label, style: context.text.labelSmall!.copyWith(color: color, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
+                // Fixed-height bar: large font scales capped and shrunk instead of overflowing.
+                MediaQuery.withClampedTextScaling(
+                  maxScaleFactor: 1.3,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      style: context.text.labelSmall!.copyWith(color: color, fontWeight: selected ? FontWeight.w700 : FontWeight.w500),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),

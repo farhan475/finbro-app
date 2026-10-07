@@ -172,7 +172,8 @@ class _RecurringFormScreenState extends ConsumerState<RecurringFormScreen> {
         title: 'Aktifkan auto-confirm?',
         message:
             'Setiap jadwal akan otomatis dicatat sebagai transaksi confirmed pada tanggal jatuh tempo '
-            '(saat aplikasi dibuka), tanpa menunggu konfirmasi Anda. Saldo account langsung berubah. '
+            '(saat aplikasi dibuka atau di latar belakang sekitar tiap 6 jam), tanpa menunggu konfirmasi Anda. '
+            'Saldo account langsung berubah. '
             'Jadwal sebelum rule dibuat tetap menunggu konfirmasi. Anda tetap bisa mengedit atau '
             'menghapus transaksinya; jadwal yang transaksinya dihapus dianggap dilewati.',
         confirmLabel: 'Aktifkan',
@@ -388,7 +389,7 @@ class _RecurringFormScreenState extends ConsumerState<RecurringFormScreen> {
               title: const Text('Auto-confirm'),
               subtitle: const Text(
                 'Nonaktif (disarankan): jadwal menunggu konfirmasi Anda sebelum masuk ke saldo. '
-                'Aktif: transaksi otomatis dicatat pada tanggal jatuh tempo saat aplikasi dibuka.',
+                'Aktif: transaksi otomatis dicatat pada tanggal jatuh tempo (saat aplikasi dibuka atau di latar belakang).',
               ),
               isThreeLine: true,
               value: _autoConfirm,

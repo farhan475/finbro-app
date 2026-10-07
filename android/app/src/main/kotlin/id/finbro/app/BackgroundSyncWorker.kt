@@ -25,7 +25,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  * reminders), daily-check rescheduling, the widget refresh and a due folder
  * backup, also when FinBro is not opened.
  *
- * Like [WidgetCompute], it runs a headless Dart entrypoint
+ * Like [WidgetRefreshWorker], it runs a headless Dart entrypoint
  * (`backgroundSyncMain` in lib/main.dart) on its own engine, which also gets
  * the [WidgetChannel] handler so Dart can render the widget. Dart reports
  * `done` on [CHANNEL]; the engine is destroyed then, after [TIMEOUT_MINUTES],

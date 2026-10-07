@@ -184,7 +184,8 @@ class _StatementImportEntryScreenState extends ConsumerState<StatementImportEntr
   Widget build(BuildContext context) {
     final fin = context.fin;
     final accounts = ref.watch(activeAccountsProvider);
-    final selected = _account;
+    // One account: it is the target. Several: the dropdown choice, while it is still active.
+    final target = accounts.length == 1 ? accounts.single : accounts.where((a) => a.id == _account?.id).firstOrNull;
     return Scaffold(
       appBar: AppBar(title: const Text('Impor Mutasi Bank')),
       body: accounts.isEmpty
@@ -198,7 +199,8 @@ class _StatementImportEntryScreenState extends ConsumerState<StatementImportEntr
                   Text('Akun tujuan', style: context.text.labelLarge),
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String>(
-                    initialValue: selected?.id,
+                    initialValue: target?.id,
+                    hint: const Text('Pilih akun'),
                     items: [
                       for (final a in accounts)
                         DropdownMenuItem<String>(value: a.id, child: Text(a.name)),
@@ -213,13 +215,13 @@ class _StatementImportEntryScreenState extends ConsumerState<StatementImportEntr
                   Text('Akun: ${accounts.single.name}', style: context.text.bodyMedium),
                 const SizedBox(height: 16),
                 FilledButton.icon(
-                  onPressed: _busy || accounts.isEmpty ? null : () => _pickFile(accounts.single),
+                  onPressed: _busy || target == null ? null : () => _pickFile(target),
                   icon: const Icon(Icons.upload_file_outlined),
                   label: const Text('Pilih file CSV'),
                 ),
                 const SizedBox(height: 8),
                 OutlinedButton.icon(
-                  onPressed: _busy || accounts.isEmpty ? null : () => _pickPdf(accounts.single),
+                  onPressed: _busy || target == null ? null : () => _pickPdf(target),
                   icon: const Icon(Icons.picture_as_pdf_outlined),
                   label: const Text('Pilih file PDF mutasi'),
                 ),

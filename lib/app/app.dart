@@ -8,6 +8,7 @@ import '../core/notifications/notification_service.dart';
 import '../core/providers.dart';
 import '../core/settings/app_settings_repository.dart';
 import '../core/utilities/app_logger.dart';
+import '../core/widget/widget_service.dart';
 import '../features/security/presentation/app_lock_gate.dart';
 import '../features/recurring/recurring_routes.dart' show recurringInstancePath;
 import 'app_wiring.dart';
@@ -64,13 +65,33 @@ class _BootstrapState extends ConsumerState<_Bootstrap> with WidgetsBindingObser
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _sub = notificationEvents.stream.listen(_route);
+    listenWidgetTaps(_openWidgetTarget);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       _runLifecycle();
+      _openWidgetTarget();
       await NotificationService.instance.initialized;
       if (!mounted) return;
       final launch = NotificationService.instance.takeLaunchEvent();
       if (launch != null) _route(launch);
     });
+  }
+
+  /// Widget section taps: Total Balance/ATS → Home, Income/Expense →
+  /// Analitik, budget → Budget, next schedule → Transaksi Berulang.
+  Future<void> _openWidgetTarget() async {
+    final target = await takeWidgetTarget();
+    if (target == null || !mounted) return;
+    final router = ref.read(routerProvider);
+    switch (target) {
+      case WidgetTarget.home:
+        router.go(Routes.home);
+      case WidgetTarget.reports:
+        router.go(Routes.reports);
+      case WidgetTarget.budget:
+        router.go(Routes.budget);
+      case WidgetTarget.recurring:
+        router.push(Routes.recurring);
+    }
   }
 
   @override

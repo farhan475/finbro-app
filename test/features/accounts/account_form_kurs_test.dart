@@ -19,8 +19,17 @@ void main() {
     }
   }
 
-  String kurs(WidgetTester tester) =>
-      tester.widget<TextField>(find.widgetWithText(TextField, 'Kurs (1 ${_code(tester)} = ... Rp)')).controller!.text;
+  String kurs(WidgetTester tester, String code) =>
+      tester.widget<TextField>(find.widgetWithText(TextField, 'Kurs 1 $code (Rp)')).controller!.text;
+
+  Future<void> pickCurrency(WidgetTester tester, String code) async {
+    await tester.tap(find.byType(DropdownButtonFormField<Currency>));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.textContaining('$code ·').last);
+    await tester.pump(const Duration(seconds: 1));
+    await settle(tester);
+  }
 
   testWidgets('switching currency shows the stored kurs of the new currency', (tester) async {
     tester.view.physicalSize = const Size(1080, 2600);
@@ -35,25 +44,17 @@ void main() {
     ));
     await settle(tester);
 
-    await tester.tap(find.text(r'$ USD'));
-    await settle(tester);
-    expect(kurs(tester), '16250');
+    await pickCurrency(tester, 'USD');
+    expect(kurs(tester, 'USD'), '16.250');
 
-    await tester.tap(find.text('€ EUR'));
-    await settle(tester);
-    expect(kurs(tester), '17250', reason: 'never carries the USD rate over to EUR');
+    await pickCurrency(tester, 'EUR');
+    expect(kurs(tester, 'EUR'), '17.250', reason: 'never carries the USD rate over to EUR');
 
-    await tester.tap(find.text('Rp IDR'));
-    await settle(tester);
-    expect(find.textContaining('Kurs (1'), findsNothing);
+    await pickCurrency(tester, 'IDR');
+    expect(find.textContaining('Kurs 1 '), findsNothing);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
     await tester.pump(const Duration(seconds: 1));
   });
-}
-
-String _code(WidgetTester tester) {
-  final label = tester.widget<Text>(find.textContaining('Kurs (1 ')).data!;
-  return RegExp(r'Kurs \(1 (\w+)').firstMatch(label)!.group(1)!;
 }

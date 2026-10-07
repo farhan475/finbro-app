@@ -91,15 +91,6 @@ class BudgetProgressCard extends ConsumerWidget {
   }
 }
 
-/// `Terlambat 2 hari`, `Hari ini`, `Besok`, `H-5`.
-String dueLabel(DateTime due, DateTime today) {
-  final days = dateOnly(due).difference(dateOnly(today)).inDays;
-  if (days < 0) return 'Terlambat ${-days} hari';
-  if (days == 0) return 'Hari ini';
-  if (days == 1) return 'Besok';
-  return 'H-$days';
-}
-
 /// Open recurring instances due in the next 14 days (and overdue ones).
 class UpcomingCard extends ConsumerWidget {
   const UpcomingCard({super.key});
@@ -141,7 +132,7 @@ class UpcomingCard extends ConsumerWidget {
 
 class _UpcomingRow extends StatelessWidget {
   const _UpcomingRow({required this.item, required this.now, required this.category, required this.currency});
-  final UpcomingItem item;
+  final UpcomingRecurring item;
   final DateTime now;
   final Category? category;
   final Currency currency;

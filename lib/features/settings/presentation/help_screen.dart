@@ -39,7 +39,7 @@ class HelpScreen extends StatelessWidget {
             body: 'Aktifkan "Pengingat tepat waktu" di Pengaturan → Notifikasi dan izinkan "Alarm & '
                 'pengingat" agar pengingat muncul tepat di jamnya. Tanpa izin itu, pengingat bisa '
                 'terlambat beberapa menit saat HP dalam mode hemat daya. Pengingat dijadwalkan ulang '
-                'setiap kali FinBro dibuka.',
+                'setiap kali FinBro dibuka dan di latar belakang sekitar tiap 6 jam.',
           ),
           SizedBox(height: 8),
           SectionHeader('Keamanan data'),
@@ -53,7 +53,8 @@ class HelpScreen extends StatelessWidget {
             icon: Icons.enhanced_encryption_outlined,
             title: 'Backup terenkripsi otomatis',
             body: 'Di Backup & Restore → Backup terenkripsi ke folder, pilih folder (mis. folder yang disinkronkan) '
-                'dan atur passphrase. FinBro membuat backup harian/mingguan saat aplikasi dibuka. '
+                'dan atur passphrase. FinBro membuat backup harian/mingguan saat aplikasi dibuka atau di latar '
+                'belakang (sekitar tiap 6 jam; Android bisa menundanya saat hemat baterai). '
                 'Passphrase tidak bisa dipulihkan; tanpa passphrase backup tidak bisa direstore.',
           ),
           _HelpItem(
@@ -68,6 +69,16 @@ class HelpScreen extends StatelessWidget {
             title: 'Apakah transfer dihitung sebagai pemasukan/pengeluaran?',
             body: 'Tidak. Transfer hanya memindahkan uang antar account, jadi total saldo tidak berubah '
                 'dan tidak masuk ke arus kas.',
+          ),
+          _HelpItem(
+            icon: Icons.widgets_outlined,
+            title: 'Widget layar utama',
+            body: 'Tambahkan dari Lainnya → Pengaturan → Widget layar utama (atau tahan layar utama → Widget → '
+                'FinBro). Widget menampilkan Total Balance dan grafiknya bulan ini; perbesar ke atas untuk '
+                'Income/Expense, lalu Available to Spend, budget dan jadwal terdekat. Ketuk bagiannya untuk '
+                'membuka layar terkait. Diperbarui saat data berubah dan sekitar tiap 30 menit. Selama PIN aktif '
+                'atau saldo disembunyikan, angkanya disamarkan. Di Xiaomi/Oppo/Vivo, aktifkan Autostart agar '
+                'widget tetap diperbarui saat FinBro tidak dibuka.',
           ),
           _HelpItem(
             icon: Icons.savings_outlined,

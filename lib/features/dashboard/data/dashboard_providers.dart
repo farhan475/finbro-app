@@ -1,7 +1,5 @@
-import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../core/database/app_database.dart';
 import '../../../core/finance/finance_service.dart';
 import '../../../core/formatting/dates.dart';
 import '../../../core/providers.dart';
@@ -53,13 +51,11 @@ final homeOverviewProvider = FutureProvider<HomeOverview>((ref) async {
   );
 });
 
-/// Cumulative daily income/expense of the current month up to today.
-final homeCashFlowProvider = FutureProvider<List<CashFlowPoint>>((ref) async {
+/// Total Balance path of the current month (Home sparkline), shared with
+/// the home-screen widget via [FinanceService.monthBalancePath].
+final homeBalancePathProvider = FutureProvider<List<int>>((ref) async {
   ref.watch(dbChangesProvider);
-  final now = ref.watch(clockProvider)();
-  final month = Period.month(now);
-  final daily = await ref.watch(financeServiceProvider).dailyTotals(month);
-  return cumulativeDaily(daily, month, until: now);
+  return ref.watch(financeServiceProvider).monthBalancePath(ref.watch(clockProvider)());
 });
 
 /// Current-month spending composition (≤ 4 slices + Other).
@@ -76,33 +72,10 @@ final homeBudgetsProvider = FutureProvider<List<BudgetUsageItem>>((ref) {
   return ref.watch(financeServiceProvider).budgetUsages(now);
 });
 
-class UpcomingItem {
-  const UpcomingItem(this.instance, this.rule);
-  final RecurringInstance instance;
-  final RecurringRule rule;
-}
-
-/// Horizon of the dashboard "Upcoming" list.
-const upcomingWindowDays = 14;
-
-/// Open (scheduled/pending) recurring instances due within the next
-/// [upcomingWindowDays] days, including overdue ones, soonest first.
-final upcomingRecurringProvider = FutureProvider<List<UpcomingItem>>((ref) async {
+/// Home "Upcoming" list: see [FinanceService.upcomingRecurring].
+final upcomingRecurringProvider = FutureProvider<List<UpcomingRecurring>>((ref) async {
   ref.watch(dbChangesProvider);
-  final now = ref.watch(clockProvider)();
-  final db = ref.watch(databaseProvider);
-  final horizon = dateOnly(now).add(const Duration(days: upcomingWindowDays));
-  final i = db.recurringInstances;
-  final r = db.recurringRules;
-  final rows = await (db.select(i).join([innerJoin(r, r.id.equalsExp(i.recurringRuleId))])
-        ..where(
-          i.status.isInValues(const [RecurringStatus.scheduled, RecurringStatus.pending]) &
-              i.dueDate.isSmallerOrEqualValue(sqlDate(horizon)),
-        )
-        ..orderBy([OrderingTerm.asc(i.dueDate), OrderingTerm.asc(r.name)])
-        ..limit(5))
-      .get();
-  return [for (final row in rows) UpcomingItem(row.readTable(i), row.readTable(r))];
+  return ref.watch(financeServiceProvider).upcomingRecurring(ref.watch(clockProvider)());
 });
 
 /// Top active goals by priority (higher first), then oldest, with progress.
