@@ -1,9 +1,9 @@
 # FinBro Implementation Summary
 
 Date: 7 Oktober 2026 · Version 1.0.0+1 · Application ID `id.finbro.app`
-Verified: `flutter analyze` clean. Full suite: **360 tests passing** (7 Okt 2026, after the docs ↔ code audit). Emulator (Pixel 8 Pro, Android 17) checks passed for the features changed 2–7 Okt; a physical-device release check is still pending; see `STATUS.md`.
+Verified: `flutter analyze` clean. Full suite: **364 tests passing** (7 Okt 2026, widget size tiers). Debug and release builds checked on a Xiaomi 14T (Android 16 / HyperOS) for the 7 Okt changes; remaining device checks are listed in `STATUS.md`.
 
-Spec: planning pack in `~/Downloads/finebro app/`. Details and decisions: `README.md`. Release readiness and open work: `STATUS.md`.
+Spec: planning pack in `~/Downloads/finebro app/`. Details and decisions: `DEVELOPMENT.md`. Release readiness and open work: `STATUS.md`.
 
 ## Implemented (all planning-pack MVP phases 0–6)
 
@@ -60,7 +60,7 @@ Docs ↔ code sync; everything the docs claimed is now in code.
 
 ## Change log 2 Oktober 2026
 
-All open items from the 4-agent audit closed; details in `bug.md`, `audit.md`, `CHANGELOG.md`.
+All open items from the 4-agent audit closed; details in `BUGS.md`, `AUDIT.md`, `CHANGELOG.md`.
 
 - Statement import (latest this session): bank CSV import wired end-to-end — route `/import` with entry in Lainnya, review screen (include/exclude, per-row category, duplicate badge, manual column mapping), commit through `LedgerService` with `sourceType: statement_import`, 6 tests (`test/statement_import/`). PDF statements followed on 3 Okt.
 

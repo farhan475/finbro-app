@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.0.0+1 — first public release (GitHub `v1.0.0`, 7 Okt 2026)
+Everything below, up to the release policy, ships in this build. See `SUMMARY.md` for the full feature list.
+
 - New (widget, owner decision: grows with its size instead of a setting): resized taller, the widget adds the change line ("↑ +37% dari bulan lalu") and Income | Expense (medium), then Available to Spend, the highest-usage budget ("Family · 100% · Limit reached", toned) and the next schedule ("Internet · H-7 · -Rp 385.000", red when overdue) (large). The tier follows each widget's current height (`FinBroWidgetProvider.tierFor`); masked snapshots carry no details, so a masked widget never shows them. Sections open their screen: balance / Available to Spend → Home, Income/Expense → Analitik, budget → Budget, schedule → Transaksi Berulang (`WidgetTarget`; cold start and running app).
 - Fixed (widget): `WidgetSync` now also recomputes after writes to `budgets`, `categories`, `goals`, `recurring_rules` and `recurring_instances`, which the taller rows read; before, a new schedule or budget only reached the widget on the next app resume or 30-min update. Regression in `test/core/widget/widget_background_test.dart`.
 - Changed (widget, owner request): the home-screen widget is now a 4×2 card like the Home "Total Balance" card — label, update time, amount and the month's balance line (drawn in Kotlin, `WidgetChart.kt`, from `FinanceService.monthBalancePath`, the same path as the Home sparkline); negative totals in red; light/dark from the system; masked states show `Rp ••••••` without a chart. New "Widget layar utama" tile in Pengaturan pins it (Android 8+) and a Bantuan entry explains it.
@@ -66,11 +68,9 @@
 - Scan: receipts can be picked from the gallery ("Struk dari galeri").
 - Layout fixes for 200% font scale (segmented buttons, quick actions, account balances, budget amounts, chart axes, menu titles).
 
-## 1.0.0+1 — first release
-First FinBro release. See `SUMMARY.md`.
-
 ## Release policy
 - Version lives in `pubspec.yaml` (`version: x.y.z+build`). Every Play upload needs a higher `+build`; keep `appVersion` in `about_screen.dart` in sync.
+- GitHub releases: tag `v<x.y.z>` and attach the signed universal APK as `FinBro-<x.y.z>.apk` (`gh release create`). The AAB is for Play Console only and is not attached.
 - `drift_schemas/drift_schema_v1.json` is the frozen v1 baseline. When bumping the schema run `dart run drift_dev schema dump lib/core/database/app_database.dart drift_schemas/` and generate migration test helpers from it (`drift_dev schema generate`).
 - Any Drift table change: bump `AppDatabase.currentSchemaVersion`, add a stepwise block in `onUpgrade`, and add a migration test that opens a database created at the previous version. Backups from older schemas must restore through the migration; backups from newer schemas are rejected (`backup_service.dart`). Current: schema 5 (3 Okt 2026: `exchange_rates`).
 - minSdk 24 (Android 7.0); targetSdk follows Flutter's default (36 on Flutter 3.47.2). Raise minSdk only when a dependency requires it.

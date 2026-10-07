@@ -98,4 +98,4 @@ Disetujui owner dan selesai: impor CSV (2 Okt), backup terenkripsi folder (domai
 
 ## Docs
 
-`README.md` (arsitektur, keputusan), `SUMMARY.md` (isi app + change log), `CHANGELOG.md`, `bug.md`, `audit.md`, `docs/PRIVACY_POLICY.md`, `docs/PLAY_STORE.md`.
+Semua di `docs/`: `DEVELOPMENT.md` (arsitektur, build, keputusan), `SUMMARY.md` (isi app + change log), `CHANGELOG.md`, `BUGS.md`, `AUDIT.md`, `PRIVACY_POLICY.md`, `PLAY_STORE.md`. `README.md` di root berisi ringkasan app untuk halaman GitHub.

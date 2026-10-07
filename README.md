@@ -1,132 +1,94 @@
-# FinBro — Finance Brother App
+<p align="center">
+  <img src="assets/brand/app_icon.png" alt="FinBro" width="112">
+</p>
 
-Personal finance app for Android, offline-first, single user. The spec is the planning pack in `~/Downloads/finebro app/` (PRD, functional requirements, formulas, schema, UX, OCR, notification, security, roadmap, test plan).
+<h1 align="center">FinBro — Finance Brother App</h1>
 
-## Stack
+<p align="center">
+  Catat uang, atur budget, pantau target. <b>Offline, privat, tanpa akun.</b>
+</p>
 
-| Area | Choice |
-|---|---|
-| UI | Flutter 3.47 / Dart 3.13, Material 3, monochrome surfaces + lime accent `#5BEB12` (light/dark), Inter font bundled offline |
-| Database | SQLite via Drift (`lib/core/database`), schema v5 (frozen dumps v1–v5 in `drift_schemas/`, stepwise migrations: v2 query indexes, v3 goal link, v4 attachment sha256, v5 exchange_rates); encrypted with SQLCipher 4 (`sqlite3` 3.x build hook `source: sqlcipher`, random 256-bit device key in `flutter_secure_storage`) |
-| State | flutter_riverpod 3 (manual providers, no codegen) |
-| Routing | go_router (bottom nav: Home, Transaksi, Budget, Analitik, Lainnya; Tujuan Keuangan from Lainnya/Home) |
-| Charts | fl_chart; PDF reports via `pdf` |
-| Notifications | flutter_local_notifications + timezone (local; exact Android scheduling with inexact fallback) |
-| OCR | google_mlkit_text_recognition (on-device, Latin) — receipts, screenshots and scanned PDF statements |
-| Statement import | CSV parser + `pdfrx` text-layer extraction for PDF statements; scanned PDFs rendered page by page with pdfrx and read by ML Kit (Android) |
-| Background work | AndroidX WorkManager (`BackgroundSyncWorker.kt`, periodic 6 h) running the headless Dart entrypoint `backgroundSyncMain` |
-| Backup | zip (archive, streaming file-backed writer/validator in a background isolate) + file_picker; optional encrypted `.finbro` backups (AES-256-GCM chunked, Argon2id via `cryptography`) to a user folder via SAF (`saf_util`/`saf_stream`, key in `flutter_secure_storage`) |
-| App lock | PIN (salted, iterated SHA-256, bound to a non-exportable Android Keystore HMAC key) + local_auth biometrics |
+<p align="center">
+  <a href="https://github.com/farhan475/finbro-app/releases/latest"><b>⬇ Unduh APK terbaru</b></a>
+  · Android 7.0+ · Bahasa Indonesia
+</p>
 
-Package id: `id.finbro.app`. Currency: accounts may hold IDR, USD, SGD, MYR, EUR, GBP, JPY, AUD, CHF, CNY or HKD, stored as integer minor units; every cross-account figure is reported in rupiah via the manual kurs (`exchange_rates`, schema v5).
+---
 
-## Structure
+FinBro adalah aplikasi keuangan pribadi untuk Android yang bekerja sepenuhnya di perangkat. Semua data tersimpan di ponsel Anda, terenkripsi, dan tidak pernah dikirim ke server mana pun. Aplikasi ini tidak punya izin internet, tidak memakai akun online, tidak menampilkan iklan, dan tidak memasang pelacak.
 
-```text
-lib/
-├── main.dart       app entry + `backgroundSyncMain` (WorkManager entrypoint, looked up by name)
-├── app/            app.dart, root.dart (DB lifecycle/restore), router.dart, shell.dart (floating navbar, AboveNavBar), routes.dart, app_wiring.dart, theme/
-├── core/
-│   ├── database/   tables, enums, converters, seed, AppDatabase, database_cipher.dart (SQLCipher key + migration), busy_wait.dart (waitWhenBusy)
-│   ├── background/ background_sync.dart (WorkManager job body) + external_writes.dart (refresh after other connections write)
-│   ├── ledger/     LedgerService — the only write path for income/expense/transfer
-│   ├── finance/    finance_math.dart (pure formulas) + FinanceService (read-side metrics)
-│   ├── notifications/, settings/, storage/, formatting/, utilities/
-│   └── widget/     widget_background.dart (snapshot + headless entrypoint) + widget_service.dart (WidgetSync)
-├── features/       accounts, backup, budgets, calendar, categories, dashboard, goals, onboarding,
-│                   planning, recurring, reports, scanner, security, settings, statement_import,
-│                   transactions
-└── shared/         lookup providers, common widgets
-```
+## Fitur
 
-Cross-feature hooks live in `lib/app/app_wiring.dart`:
-- Ledger listeners run after every commit: budget threshold alerts and daily-activity marking.
-- Lifecycle tasks run on app start and every resume: pick up writes from other connections (`ExternalWrites`, via `PRAGMA data_version`), integrity check, recurring sync (instances, auto-confirm, reminders), daily-check/monthly-review scheduling, home-screen widget resync, and the automatic encrypted folder backup when due.
-- Background tasks (`backgroundTasksProvider`) run from WorkManager every ~6 h while the app is not on screen: recurring sync, daily-check reschedule, widget render and the due folder backup, with the same ledger listeners as the app (budget alerts fire for background auto-confirms). Skipped before onboarding and when no database exists yet.
+**Catatan harian**
+- Pemasukan, pengeluaran, dan transfer antar rekening, e-wallet, dan cash.
+- Pencarian, filter, edit, duplikat, dan rekonsiliasi saldo akun.
+- Multi mata uang (IDR, USD, SGD, MYR, EUR, GBP, JPY, AUD, CHF, CNY, HKD) dengan kurs manual. Semua total ditampilkan dalam rupiah.
 
-Every isolate (app, notification actions, widget, WorkManager) opens the live database only through `openDeviceDatabase()`. Two connections may write at once: recurring generation reads and inserts in one `BEGIN IMMEDIATE` transaction, posting closes the instance conditionally in the same transaction, and connections wait on each other with a Dart busy handler (`waitWhenBusy`).
+**Perencanaan**
+- Total saldo dan **Available to Spend**: uang yang aman dipakai setelah dikurangi dana cadangan, kewajiban terjadwal, dan buffer minimum.
+- Budget bulanan per kategori dengan peringatan di 70%, 85%, dan 100% (bisa diubah per budget).
+- Tujuan keuangan: dana darurat, tabungan, dan dana pengembangan, bisa ditautkan ke akun tabungan.
+- Transaksi berulang (gaji, tagihan, langganan) dengan pengingat H/H-1/H-3, konfirmasi, atau auto-confirm.
+- Kalender keuangan dan pengingat catatan harian.
 
-The Android widget (`android/.../FinBroWidgetProvider.kt`, 4×2 by default, styled like the Home "Total Balance" card: label + update time, amount, and the month's balance line) only displays what Dart sends over the `id.finbro.app/widget` channel (`render`: balance text, caption, the `FinanceService.monthBalancePath` points, negative flag and, when unmasked, detail texts + tones); Kotlin draws the line into a bitmap per widget size (`WidgetChart.kt`, monotone curve + fading fill + dots, like `BalanceSparkline`). The widget grows with its height (`tierFor`): medium adds the change line and Income | Expense, large adds Available to Spend, the highest-usage budget and the next schedule; each section opens its screen through `MainActivity` (`WidgetTarget`: Home, Analitik, Budget, Transaksi Berulang). While the app runs, `WidgetSync` recomputes on the app's own DB connection after writes to `accounts`, `transactions`, `exchange_rates`, `app_settings`, `budgets`, `categories`, `goals`, `recurring_rules` or `recurring_instances` and on every start/resume. For system updates (widget placed, every 30 min via `updatePeriodMillis`) the provider queues `WidgetRefreshWorker` (WorkManager one-time work), which runs `widgetBackgroundMain` in a fresh headless engine that reads the same SQLite file (never creates it), renders, reports `done` and is destroyed — running as work keeps the process alive until Dart has rendered. Lainnya → Pengaturan → "Widget layar utama" asks the launcher to pin it (Android 8+).
+**Laporan**
+- Laporan bulanan dan tahunan: arus kas, komposisi pengeluaran, top spending, budget vs aktual, dan financial health.
+- Ekspor laporan PDF dan transaksi CSV.
 
-## Run / build
+**Input cepat**
+- Scan struk dan screenshot transaksi dengan OCR di perangkat. Hasilnya selalu berupa draf yang Anda periksa dulu.
+- Impor mutasi rekening dari CSV (BCA, Mandiri, BNI, BRI, Jago, SeaBank, blu) atau PDF, termasuk PDF hasil scan. Ada tinjauan per baris dan peringatan duplikat.
+
+**Widget layar utama**
+- Kartu Total Balance dengan grafik saldo bulan ini.
+- Saat diperbesar, widget menampilkan Income/Expense, lalu Available to Spend, budget, dan jadwal terdekat. Ketuk tiap bagian untuk membuka layarnya.
+- Angka disamarkan saat kunci aplikasi aktif atau saldo disembunyikan.
+
+**Keamanan & data**
+- Database terenkripsi (SQLCipher) dengan kunci per perangkat.
+- Kunci aplikasi dengan PIN dan sidik jari. Layar aplikasi tidak bisa di-screenshot atau direkam.
+- Backup/restore manual, plus backup terenkripsi otomatis (AES-256-GCM) ke folder pilihan Anda secara harian atau mingguan.
+- Proses latar belakang tiap ±6 jam untuk transaksi berulang, peringatan budget, widget, dan backup folder.
+
+**Tampilan**
+- Tema terang dan gelap, aksen lime, font Inter. Tata letak tetap rapi di ukuran font sampai 200%.
+
+## Instalasi
+
+1. Buka halaman [Releases](https://github.com/farhan475/finbro-app/releases/latest) dan unduh `FinBro-<versi>.apk`.
+2. Buka file APK di ponsel. Izinkan "Instal aplikasi tidak dikenal" untuk browser atau file manager Anda bila diminta.
+3. Ikuti onboarding: isi nama, tambahkan minimal satu akun beserta saldo awalnya, atur alokasi, lalu selesai.
+
+APK ditandatangani dengan kunci rilis FinBro. Sidik jari sertifikat (SHA-256):
+`12a40ea61091cac28b470f0ff4618b5a7f70ab2f7815a28b1e7cc8ae313fbc02`
+
+> **Xiaomi / Oppo / Vivo:** aktifkan *Autostart* untuk FinBro agar pengingat dan widget tetap diperbarui saat aplikasi tidak dibuka. Di HyperOS, izinkan juga *"Add shortcuts to Home screen"* di izin aplikasi FinBro supaya widget bisa dipasang dari dalam aplikasi.
+
+## Privasi
+
+FinBro tidak mengumpulkan maupun membagikan data apa pun. Rilis Android tidak memiliki izin `INTERNET`. Menghapus aplikasi berarti menghapus semua datanya, jadi buat backup secara berkala. Selengkapnya: [Kebijakan Privasi](docs/PRIVACY_POLICY.md).
+
+## Build dari source
+
+Butuh Flutter 3.47 (Dart 3.13) dan Android SDK.
 
 ```bash
 flutter pub get
-dart run build_runner build        # only after changing Drift tables
 flutter test
-flutter run -d <android-device>
-flutter build apk --release                   # universal APK, signed with the release key
-flutter build appbundle --release             # AAB for Play Store
+flutter run -d <perangkat-android>
 ```
 
-### Release signing
+Build release memerlukan `android/key.properties` (tidak ada di repo) dan tidak akan pernah memakai kunci debug. Arsitektur, struktur kode, dan detail build ada di [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
-- Keystore: `~/finbro-keys/finbro-release.jks` (alias `finbro`, RSA 4096, valid 10 000 days).
-- Passwords: `android/key.properties` (git-ignored), copy in `~/finbro-keys/key.properties`.
-- **Back up `~/finbro-keys/` somewhere safe.** Losing it means existing installs can never be updated.
-- Without `android/key.properties` the release build fails (`GradleException`); it never falls back to the debug key.
+## Dokumentasi
 
-On desktop (Linux) the app runs for development. OCR, the camera, and notification scheduling are Android-only there.
-
-## Decisions agreed with the user (not written in the planning pack)
-
-- Schema additions:
-  - `accounts.icon`
-  - `budgets.attention_threshold` (70), `warning_threshold` (85), `over_threshold` (100), editable per budget, and `budgets.last_notified_threshold`
-  - `recurring_rules.interval_days`, `month_of_year`, `reminder_offset_days`, `reminder_time`
-  - `attachments.image_hash`
-  - `planning_settings.flexible_residual_mode` and `planning_settings.user_reserve`
-  - new table `merchant_mappings`
-  - `goals.linked_account_id` (v3), `attachments.file_sha256` (v4), table `exchange_rates` (v5)
-- Net Income = total confirmed income.
-- Goal contributions are `goal_movements`; the money stays in its accounts. `goals.current_amount` is a rebuildable cache. A goal linked to a Savings account (schema v3) takes that account's calculated balance (in rupiah) as its progress instead of movements.
-- Emergency Fund balance = sum of active goals of type `emergency`.
-- Reserved money = active goal balances + the rest of this month's Family allocation + the manual user reserve.
-- Upcoming obligations = open recurring expenses due by the end of the current month.
-- Savings Rate numerator (Net Amount Saved) = net transfers into savings-type accounts from non-savings accounts. Goal contributions are earmarks and count only as goal progress, never as saved money, so nothing is counted twice (owner decision, 2 Okt 2026; replaces the earlier goals + transfers rule).
-- Account balances and Total Balance include confirmed transactions dated up to now; future-dated rows count from their date.
-- Daily check = per-date local notifications scheduled 30 days ahead and cancelled once a day is ACTIVE or NO_ACTIVITY. "Nanti" (remind later) fires once, +1 hour.
-- Budget alerts: attention 70%, warning 85%, over 100% and "melewati budget" (>100%). Each fires once while usage keeps rising in a period; a jump across several thresholds announces only the highest; if an edit/delete drops usage below a threshold, that threshold can fire again; changing the budget amount resets the level.
-- Recurring instances and auto-confirm are processed when the app opens or resumes and, since 7 Okt 2026 (owner decision), every ~6 h by WorkManager while the app is closed (battery-not-low; skipped while the app is on screen).
-- Database encryption (owner decision, 7 Okt 2026): SQLCipher with a random per-device key in Android Keystore-backed storage, never in backups. Existing plaintext databases are encrypted on first open (verified copy + atomic swap; the plaintext is kept as `finbro.sqlite.plain-pending` until a later app start reads the key back, because the key store persists asynchronously). Backups stay portable plaintext SQLite inside the zip and are re-encrypted with the device key on restore. A lost key is never answered by silently creating a new database: the user can set the unreadable file aside ("Mulai dengan database baru") and restore a backup.
-- The UI mixes Bahasa Indonesia and English financial terms, as in the mockup. Colors follow the monochrome spec, not the violet swatches in the mockup.
-
-## Roadmap status
-
-- Seed merchant Indonesia: implemented with scan suggestions and tests.
-- Exact notification scheduling: implemented on Android with permission check and inexact fallback; device delivery still needs validation.
-- Multi-currency with manual rates: implemented (schema v5 `exchange_rates`, 11 currencies, minor-unit amounts; amounts are entered and shown in the account's own currency (transaction/recurring/scan forms, lists, Home account chips, detail, PDF, CSV `currency` column); every cross-account figure — totals, day-group totals, top expenses, amount filter, budgets, goals — is converted to IDR; kurs editor at `/settings/rates` (Lainnya → Pengaturan → Kurs Mata Uang); kurs are typed in Indonesian notation (`16.250`, `105,25`); transfers only between accounts of the same currency).
-- Android home-screen widget: implemented (4×2 card like the Home balance card: "Total Balance", amount, update time, month balance line; taller sizes add change + Income/Expense, then Available to Spend, top budget and next schedule, each opening its screen; `Rp ••••••` + `Terkunci` whenever the app-lock PIN is set, `Saldo disembunyikan` when the Home eye toggle hides balances, no chart or details while masked; negative totals in red; follows system light/dark; resynced by `WidgetSync` after balance/kurs/lock/hide-balance/budget/goal/recurring writes and on app start/resume, and on placement/every 30 min by `WidgetRefreshWorker`; in-app "Widget layar utama" pin request).
-- Bank CSV import: implemented (7 bank presets + manual mapping, review screen). PDF statements: implemented (pdfrx text-layer extraction, password support). Scanned (image-only) PDFs: OCR on Android (max 30 pages, page by page at ~216 dpi, progress + cancel, review flagged "PDF scan (OCR)"); off Android they are rejected.
-- Encrypted folder backup via SAF: implemented (Backup & Restore → "Backup terenkripsi ke folder": folder, passphrase, harian/mingguan, keep 3/5/7/14/30, "Backup sekarang"; restore from `.finbro` with passphrase — a device without a backup key adopts the restored backup's key so automatic folder backups continue). Copies land under a `.partial` name and are renamed when complete, so an interrupted copy is never mistaken for a backup. Cloud sync using that format is not implemented.
-- Backup/restore memory bound removed: zip write/validate/restore and `.finbro` encrypt/decrypt stream to and from files in background isolates (limits are size caps, not memory caps).
-
-## Deviations / not done
-
-- Cloud sync: not implemented (owner: not now; needs a sync design and an endpoint/provider).
-- Statement PDFs that mix text pages and scanned pages use only the text layer.
-- Manual backup zips and safety snapshots in app storage are plaintext SQLite (portable); only the live database and folder backups are encrypted.
-- Flutter Web is not supported (Drift/SQLite via `dart:ffi`).
-
-## Verified on device (Xiaomi 14T, Android 16 / HyperOS 3)
-
-- Install, onboarding, transactions, budget, dashboard.
-- Daily check notification at the chosen time, with actions; "Tidak ada" writes NO_ACTIVITY from the background isolate without opening the app.
-- Budget alerts at 85% and 100%, no repeated alert for the same threshold.
-- App lock: wrong PIN rejected with attempt counter, correct PIN and fingerprint unlock, relock on resume.
-- Backup to Downloads via the system save dialog (manifest checksum matches), CSV export, restore preview from a picked file.
-- Pending on device: encrypted folder backup/restore, OCR accuracy on real photographed receipts. (Navbar/FAB, multi-currency, kurs editor, import with 2+ accounts and the 4×2 widget were checked on 7 Okt, see `STATUS.md`.)
-
-## Implementation status (planning-pack TODO.md)
-
-| Section | Status |
+| Dokumen | Isi |
 |---|---|
-| Foundation: project, package name, app icon, monochrome logo, light/dark theme, migration layer, Drift + Riverpod | Done |
-| Core Data: all tables incl. goals/movements, recurring rules/instances, daily activity, planning/app settings | Done |
-| Core Features: account/category CRUD, income/expense/transfer, search/filter, edit/delete/duplicate, balance/budget/goal/ATS/emergency engines | Done |
-| Notifications: local service, daily check, budget threshold, recurring, salary reminder, monthly review | Done (scheduling verified in code/tests; delivery needs a device) |
-| Reports: income vs expense, spending donut, top spending bar, budget vs actual, savings rate, emergency coverage, metrics panel; monthly and yearly scope, PDF export for both | Done |
-| OCR: device OCR (ML Kit), preprocessing, receipt + screenshot parsers, merchant mapping, confidence UI, duplicate detection | Done (accuracy spike on a target device pending) |
-| Statement import: bank CSV (BCA/Mandiri/BNI/BRI/Jago/SeaBank/blu) and text-layer PDF, review screen with per-row category + include/exclude, duplicate detection, manual column mapping | Done (scanned PDFs: on-device OCR on Android, max 30 pages; rejected off Android). Tests in `test/statement_import/` |
-| Reliability: backup/export, restore/import, encrypted folder backup, integrity check, app lock, local error log | Done; device performance test pending |
-| Release: seeded categories, onboarding, empty states, debug demo-data seeding + debug wipe, release keystore | Done; latest UI/widget changes still need a device check |
+| [DEVELOPMENT.md](docs/DEVELOPMENT.md) | Stack, struktur kode, build & signing, keputusan desain |
+| [SUMMARY.md](docs/SUMMARY.md) | Ringkasan fitur dan catatan perubahan per sesi |
+| [CHANGELOG.md](docs/CHANGELOG.md) | Riwayat perubahan |
+| [STATUS.md](docs/STATUS.md) | Status proyek, validasi perangkat, pekerjaan terbuka |
+| [BUGS.md](docs/BUGS.md) | Bug yang diketahui dan yang sudah diperbaiki |
+| [AUDIT.md](docs/AUDIT.md) | Hasil audit keamanan |
+| [PRIVACY_POLICY.md](docs/PRIVACY_POLICY.md) | Kebijakan privasi |
+| [PLAY_STORE.md](docs/PLAY_STORE.md) | Teks listing Play Store |
