@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 4x1 (minWidth = 70 * 4 - 30). updatePeriodMillis (30 min, the platform
+     minimum) runs the headless compute so future-dated rows and app-closed
+     periods still refresh; while the app runs WidgetSync pushes updates. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/finbro_widget_description"
+    android:initialLayout="@layout/finbro_widget"
+    android:minWidth="250dp"
+    android:minHeight="40dp"
+    android:minResizeWidth="180dp"
+    android:minResizeHeight="40dp"
+    android:previewLayout="@layout/finbro_widget"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellWidth="4"
+    android:targetCellHeight="1"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />

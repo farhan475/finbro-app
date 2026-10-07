@@ -48,8 +48,7 @@ class HomeScreen extends ConsumerWidget {
     final name = ref.watch(userNameProvider);
 
     return Scaffold(
-      floatingActionButton: Transform.translate(
-        offset: const Offset(0, -58),
+      floatingActionButton: AboveNavBar(
         child: FloatingActionButton(
           heroTag: 'home-fab',
           tooltip: 'Tambah transaksi',
@@ -199,7 +198,9 @@ class _BalanceCard extends ConsumerWidget {
                   tooltip: hidden ? 'Tampilkan saldo' : 'Sembunyikan saldo',
                   color: fin.muted,
                   icon: Icon(hidden ? Icons.visibility_off_outlined : Icons.visibility_outlined),
-                  onPressed: () => ref.read(appSettingsRepositoryProvider).setBool(SettingKeys.hideBalance, !hidden),
+                  onPressed: () => ref
+                      .read(appSettingsRepositoryProvider)
+                      .setBool(SettingKeys.hideBalance, !hidden),
                 ),
               ),
               const Spacer(),

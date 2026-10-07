@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="finbro_widget_title">FinBro · Total Balance</string>
+    <string name="finbro_widget_balance_placeholder">Rp –</string>
+    <string name="finbro_widget_loading">Memuat…</string>
+    <string name="finbro_widget_description">Total saldo semua akun aktif. Tersamarkan saat App Lock aktif atau saldo disembunyikan.</string>
+</resources>

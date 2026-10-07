@@ -10,19 +10,26 @@ import 'theme/app_theme.dart';
 ///
 /// The bar floats above the content as a frosted pill in the theme's own
 /// surface tone (dark glass in dark mode, light glass in light mode). The
-/// Scaffold extends the body behind it, so branch screens see the bar's
-/// height in `MediaQuery.padding.bottom` and pad their lists with
-/// [navBarClearance].
+/// Scaffold extends the body behind it; branch screens read the bar's full
+/// height (system inset included) from [_NavBarScope] through
+/// [navBarClearance] (list padding) and [AboveNavBar] (FAB lift). The FAB
+/// slot of a branch Scaffold strips `MediaQuery` padding, so the extent is
+/// published explicitly instead of read from `MediaQuery`.
 class AppShell extends StatelessWidget {
   const AppShell({super.key, required this.shell});
   final StatefulNavigationShell shell;
 
   @override
   Widget build(BuildContext context) {
+    // One inset for both the bar's own padding and the published extent, so
+    // the FAB lift always matches the bar. View padding stays put while the
+    // keyboard is open.
+    final systemBottom = MediaQuery.viewPaddingOf(context).bottom;
     return Scaffold(
       extendBody: true,
-      body: shell,
+      body: _NavBarScope(extent: _navBarExtent + systemBottom, child: shell),
       bottomNavigationBar: _FloatingNavBar(
+        systemBottom: systemBottom,
         selectedIndex: shell.currentIndex,
         onSelected: (i) => shell.goBranch(i, initialLocation: i == shell.currentIndex),
       ),
@@ -30,12 +37,24 @@ class AppShell extends StatelessWidget {
   }
 }
 
-/// Bottom padding for a scrollable in a shell branch so its last item can
-/// scroll clear of the floating bar (and the FAB above it when [fab]).
-double navBarClearance(BuildContext context, {bool fab = false}) {
-  final bottom = MediaQuery.paddingOf(context).bottom;
-  return bottom + (fab ? _navBarExtent + 96 : _navBarExtent + 16);
+/// Distance from the screen bottom to the top edge of the floating bar.
+class _NavBarScope extends InheritedWidget {
+  const _NavBarScope({required this.extent, required super.child});
+  final double extent;
+
+  /// 0 outside the shell (pushed routes, tests).
+  static double extentOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_NavBarScope>()?.extent ?? 0;
+
+  @override
+  bool updateShouldNotify(_NavBarScope old) => old.extent != extent;
 }
+
+/// Bottom padding for a scrollable in a shell branch so its last item can
+/// scroll clear of the floating bar (and of an [AboveNavBar] FAB when [fab]:
+/// 16 margin + 56 FAB + 24 gap).
+double navBarClearance(BuildContext context, {bool fab = false}) =>
+    _NavBarScope.extentOf(context) + (fab ? 96 : 16);
 
 const double _navBarHeight = 68;
 const double _navBarGap = 16;
@@ -45,20 +64,22 @@ const double _navBarSideInset = 18;
 const double _navBarExtent = _navBarHeight + _navBarGap;
 
 /// Lifts a branch screen's FAB above the floating bar. The inner Scaffold
-/// positions its FAB from the system inset only, so it would otherwise sit
-/// behind the bar.
+/// positions its FAB 16 dp from its own bottom edge, which lies behind the
+/// bar; this adds the bar's full height so the FAB keeps the same 16 dp
+/// margin above the bar on every device inset.
 class AboveNavBar extends StatelessWidget {
   const AboveNavBar({super.key, required this.child});
   final Widget child;
 
   @override
   Widget build(BuildContext context) =>
-      Padding(padding: const EdgeInsets.only(bottom: _navBarExtent), child: child);
+      Padding(padding: EdgeInsets.only(bottom: _NavBarScope.extentOf(context)), child: child);
 }
 
 class _FloatingNavBar extends StatelessWidget {
-  const _FloatingNavBar({required this.selectedIndex, required this.onSelected});
+  const _FloatingNavBar({required this.systemBottom, required this.selectedIndex, required this.onSelected});
 
+  final double systemBottom;
   final int selectedIndex;
   final ValueChanged<int> onSelected;
 
@@ -68,7 +89,6 @@ class _FloatingNavBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final fin = context.fin;
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final systemBottom = MediaQuery.paddingOf(context).bottom;
     return Padding(
       padding: EdgeInsets.fromLTRB(_navBarSideInset, 0, _navBarSideInset, systemBottom + _navBarGap),
       child: DecoratedBox(

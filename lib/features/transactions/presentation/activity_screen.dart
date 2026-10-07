@@ -99,11 +99,13 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        heroTag: 'activity-add',
-        tooltip: 'Tambah transaksi',
-        onPressed: () => context.push(Routes.transactionNew(_filter.type)),
-        child: const Icon(Icons.add),
+      floatingActionButton: AboveNavBar(
+        child: FloatingActionButton(
+          heroTag: 'activity-add',
+          tooltip: 'Tambah transaksi',
+          onPressed: () => context.push(Routes.transactionNew(_filter.type)),
+          child: const Icon(Icons.add),
+        ),
       ),
       body: Column(
         children: [
@@ -215,7 +217,7 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
         ],
       );
     }
-    final rows = dayGroupWidgets(context, groupByDay(_pager.rows));
+    final rows = dayGroupWidgets(context, groupByDay(_pager.rows, idrOf: watchIdrConverter(ref)));
     return ListView.builder(
       padding: EdgeInsets.fromLTRB(16, 0, 16, navBarClearance(context, fab: true)),
       itemCount: rows.length + (_pager.hasMore ? 1 : 0),
