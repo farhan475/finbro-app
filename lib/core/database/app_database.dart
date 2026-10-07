@@ -2,10 +2,16 @@ import 'dart:io';
 
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
+// Background-isolate DB errors arrive wrapped in this type; unwrapped so a
+// cipher failure keeps its own type.
+// ignore: experimental_member_use
+import 'package:drift/remote.dart' show DriftRemoteException;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'busy_wait.dart';
 import 'converters.dart';
+import 'database_cipher.dart';
 import 'enums.dart';
 import 'seed.dart';
 import 'tables.dart';
@@ -31,21 +37,29 @@ part 'app_database.g.dart';
     MerchantMappings,
     AppSettings,
     Backups,
+    ExchangeRates,
   ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
-  /// Opens the on-device database file.
+  /// Opens a plaintext database file as-is. App code opens the live database
+  /// through [openDeviceDatabase]; this is for tests and backup tooling.
   factory AppDatabase.open(File file) =>
-      AppDatabase(NativeDatabase.createInBackground(file));
+      AppDatabase(NativeDatabase.createInBackground(file, setup: waitWhenBusy));
+
+  /// Opens (or creates) a SQLCipher database encrypted with [key]; see
+  /// [unlockDatabase] for the per-connection setup (including the busy
+  /// handler, [waitWhenBusy]).
+  factory AppDatabase.encrypted(File file, DatabaseKey key) =>
+      AppDatabase(NativeDatabase.createInBackground(file, setup: (raw) => unlockDatabase(raw, key)));
 
   /// In-memory database for tests and fixtures.
   factory AppDatabase.memory() => AppDatabase(NativeDatabase.memory());
 
   /// Bump together with a new `if (from < N)` step in [migration], then dump
   /// the schema into `drift_schemas/` (see CHANGELOG release policy).
-  static const int currentSchemaVersion = 4;
+  static const int currentSchemaVersion = 5;
 
   @override
   int get schemaVersion => currentSchemaVersion;
@@ -83,12 +97,15 @@ class AppDatabase extends _$AppDatabase {
       if (from < 4) {
         await m.addColumn(attachments, attachments.fileSha256);
       }
+      if (from < 5) {
+        await m.createTable(exchangeRates);
+        await seedExchangeRates(this);
+      }
     },
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');
-      // Wait for a competing connection (notification background isolate,
-      // backup/restore) instead of failing immediately with SQLITE_BUSY.
-      await customStatement('PRAGMA busy_timeout = 5000');
+      // No `PRAGMA busy_timeout` here: it would replace the busy handler the
+      // file-backed factories install in their setup ([waitWhenBusy]).
     },
   );
 
@@ -118,6 +135,40 @@ Future<File> databaseFile() async {
   final dir = await getApplicationSupportDirectory();
   return File(p.join(dir.path, 'finbro.sqlite'));
 }
+
+/// The live database file and the device key it is encrypted with.
+typedef DeviceDatabase = ({File file, DatabaseKey key});
+
+/// The live database, ready to open or replace: the device key is created on
+/// first use and a plaintext database from an older app version is
+/// encrypted first ([prepareEncryptedDatabase]).
+Future<DeviceDatabase> deviceDatabase() async {
+  final file = await databaseFile();
+  return (file: file, key: await prepareEncryptedDatabase(file, const SecureDatabaseKeyStore()));
+}
+
+/// Opens the live on-device database. The single entry point for every
+/// isolate (app, notification actions, widget, background work). Opens
+/// eagerly, so a key or cipher failure surfaces here as a
+/// [DatabaseCipherException] instead of on some later query.
+Future<AppDatabase> openDeviceDatabase() async {
+  final live = await deviceDatabase();
+  final db = AppDatabase.encrypted(live.file, live.key);
+  try {
+    await db.customSelect('SELECT 1').get();
+  } catch (e, s) {
+    await db.close();
+    if (e case DriftRemoteException(remoteCause: final DatabaseCipherException cause)) {
+      Error.throwWithStackTrace(cause, s);
+    }
+    rethrow;
+  }
+  return db;
+}
+
+/// Moves an unreadable live database aside (kept as `.unreadable-<time>`,
+/// never deleted) so the next [openDeviceDatabase] starts a new one.
+Future<File> setAsideDeviceDatabase() async => moveDatabaseAside(await databaseFile());
 
 /// Converter shortcuts used in custom SQL range filters.
 String sqlDate(DateTime d) => isoDate(d);

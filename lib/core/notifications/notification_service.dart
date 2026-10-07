@@ -359,7 +359,7 @@ Future<void> notificationBackgroundHandler(NotificationResponse r) async {
     if (e == null || e.kind != NotificationKind.dailyCheck) return;
     final day = DateTime.parse(e.data['date'] as String);
     if (e.actionId == NotificationAction.noTransaction) {
-      final db = AppDatabase.open(await databaseFile());
+      final db = await openDeviceDatabase();
       try {
         await markNoActivity(db, day);
       } finally {
