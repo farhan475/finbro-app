@@ -55,7 +55,13 @@ FinBro adalah aplikasi keuangan pribadi untuk Android yang bekerja sepenuhnya di
 
 ## Instalasi
 
-1. Buka halaman [Releases](https://github.com/farhan475/finbro-app/releases/latest) dan unduh `FinBro-<versi>.apk`.
+1. Buka halaman [Releases](https://github.com/farhan475/finbro-app/releases/latest) dan unduh **satu** APK:
+   - `FinBro-<versi>-arm64-v8a.apk`: sebagian besar HP Android modern (pilih ini kalau ragu, ±52 MB);
+   - `FinBro-<versi>-armeabi-v7a.apk`: HP lama 32-bit;
+   - `FinBro-<versi>-x86_64.apk`: emulator / perangkat Intel;
+   - `FinBro-<versi>.apk`: universal, berisi semua arsitektur (±141 MB).
+
+   Semua varian memakai kode versi dan kunci yang sama, jadi bisa saling menimpa saat update tanpa kehilangan data.
 2. Buka file APK di ponsel. Izinkan "Instal aplikasi tidak dikenal" untuk browser atau file manager Anda bila diminta.
 3. Ikuti onboarding: isi nama, tambahkan minimal satu akun beserta saldo awalnya, atur alokasi, lalu selesai.
 

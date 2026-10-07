@@ -56,6 +56,7 @@ dart run build_runner build        # only after changing Drift tables
 flutter test
 flutter run -d <android-device>
 flutter build apk --release                   # universal APK, signed with the release key
+flutter build apk --release --split-per-abi --android-project-arg=force-version-code-ignoring-abi=true   # per-ABI APKs for GitHub releases
 flutter build appbundle --release             # AAB for Play Store
 ```
 
