@@ -4,7 +4,7 @@ Status setelah penyelesaian pekerjaan codebase: lihat item aktif di bawah. `flut
 
 ## Masih terbuka
 
-- Widget: engine headless (update sistem tiap 30 menit / saat dipasang) membuka DB yang sama dengan app; bila gagal, widget menampilkan `••••••` + "Buka FinBro untuk memperbarui" (tidak pernah angka basi). Pantau log `FinBroWidget` di perangkat.
+- Widget: update sistem (dipasang / tiap 30 menit) berjalan sebagai `WidgetRefreshWorker` dengan engine headless yang membuka DB yang sama dengan app; bila gagal, widget menampilkan `Rp ••••••` + "Buka FinBro untuk memperbarui" (tidak pernah angka basi). Di Xiaomi/Oppo/Vivo tanpa Autostart, update saat app ditutup bisa tertahan sampai FinBro dibuka. Pantau log `FinBroWidget`.
 - Filter nominal Transaksi membandingkan nilai rupiah (kurs manual); baris struk hasil OCR (subtotal/pajak) tetap rupiah karena tidak terikat akun.
 - Sinkronisasi cloud belum dikerjakan (keputusan owner 7 Okt).
 - WorkManager dapat ditunda OS (Doze/penghemat baterai/OEM). Bila job sedang menulis backup folder lalu dihentikan, salinan `.partial` tertinggal dan dibersihkan backup berikutnya.
@@ -12,6 +12,17 @@ Status setelah penyelesaian pekerjaan codebase: lihat item aktif di bawah. `flut
 
 ## Belum divalidasi di perangkat
 OCR struk foto asli, TalkBack, sidik jari, notifikasi di Doze dalam/OEM lain, perilaku lock baru (tombol back, fokus keyboard, batas 5 menit file picker), backup/restore streaming dan **backup/restore terenkripsi folder** (UI 7 Okt), **multi-currency** (form transaksi/akun, tampilan native, kurs editor, transfer sama mata uang), **widget home screen** (mask Terkunci / Saldo disembunyikan, update setelah ubah saldo/kurs, update 30 menit, ukuran 4×1), **posisi FAB (+)** Home/Transaksi di atas navbar, **impor PDF statement** termasuk **OCR PDF hasil scan**, **WorkManager** (job berjalan dengan app tertutup), **SQLCipher** (instalasi baru, migrasi dari APK lama, restore).
+
+## Selesai (7 Okt 2026, audit dokumen ↔ kode)
+
+- Widget bertingkat (7 Okt malam): `WidgetSync` hanya memantau `accounts`/`transactions`/`exchange_rates`/`app_settings`, padahal baris tingkat besar membaca budget, kategori, goal dan recurring → jadwal/budget baru baru muncul di widget setelah app di-resume atau update 30 menit. Kini tabel-tabel itu ikut dipantau. Regresi `test/core/widget/widget_background_test.dart`; dicek di Xiaomi 14T.
+- Widget (permintaan owner): tampilan lama hanya teks 4×1 dengan latar biru gelap dan tidak mirip Home; update sistem dijalankan dari `onUpdate` broadcast receiver lewat engine ter-cache, sehingga proses bisa dimatikan sebelum Dart merender (widget tertahan di "Memuat…"/angka lama). Kini 4×2 seperti kartu Total Balance (jumlah + garis saldo bulan ini, merah bila negatif, terang/gelap), update sistem lewat `WidgetRefreshWorker` (WorkManager) yang menunggu `done` lalu menghancurkan engine, tombol "Widget layar utama". Test `test/core/widget/widget_background_test.dart` (path grafik), `test/reports/report_data_test.dart` (`monthBalancePath`).
+- Impor mutasi dengan ≥2 akun aktif: `StatementImportEntryScreen` memanggil `_pickFile(accounts.single)` / `_pickPdf(accounts.single)` → `StateError: Too many elements`, dropdown akun diabaikan. Kini akun pilihan dropdown menjadi target; tombol nonaktif sampai akun dipilih. Regresi `test/statement_import/import_screen_test.dart`.
+- Kurs `16.250` (titik ribuan) tersimpan 16,25 di Kurs Mata Uang dan form akun (parser mengganti ',' → '.' lalu `double.parse`). `parseRate`/`formatRateInput` di `money.dart`; test `test/core/money_format_test.dart`.
+- Chip Akun di Home memformat saldo non-IDR sebagai rupiah (`AmountText` tanpa `currency`). Available to Spend tidak ikut disembunyikan tombol mata → kini disembunyikan.
+- Font 200%: label navbar overflow 32 px di bar 56 dp; label "Available to Spend" terpotong per huruf. Label navbar dibatasi 1,3× + FittedBox; ATS dan baris kurs menumpuk nominal di bawah label.
+- Teks UI backup folder/auto-confirm/Bantuan hanya menyebut "saat aplikasi dibuka" padahal WorkManager juga menjalankannya → diperbarui.
+- Route `/settings` tidak punya pintu masuk → dihapus.
 
 ## Selesai (7 Okt 2026, lanjutan)
 

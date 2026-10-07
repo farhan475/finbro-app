@@ -7,7 +7,7 @@ Personal finance app for Android, offline-first, single user. The spec is the pl
 | Area | Choice |
 |---|---|
 | UI | Flutter 3.47 / Dart 3.13, Material 3, monochrome surfaces + lime accent `#5BEB12` (light/dark), Inter font bundled offline |
-| Database | SQLite via Drift (`lib/core/database`), schema v5 (frozen v1 baseline + query indexes, stepwise migrations); encrypted with SQLCipher 4 (`sqlite3` 3.x build hook `source: sqlcipher`, random 256-bit device key in `flutter_secure_storage`) |
+| Database | SQLite via Drift (`lib/core/database`), schema v5 (frozen dumps v1–v5 in `drift_schemas/`, stepwise migrations: v2 query indexes, v3 goal link, v4 attachment sha256, v5 exchange_rates); encrypted with SQLCipher 4 (`sqlite3` 3.x build hook `source: sqlcipher`, random 256-bit device key in `flutter_secure_storage`) |
 | State | flutter_riverpod 3 (manual providers, no codegen) |
 | Routing | go_router (bottom nav: Home, Transaksi, Budget, Analitik, Lainnya; Tujuan Keuangan from Lainnya/Home) |
 | Charts | fl_chart; PDF reports via `pdf` |
@@ -24,10 +24,11 @@ Package id: `id.finbro.app`. Currency: accounts may hold IDR, USD, SGD, MYR, EUR
 
 ```text
 lib/
-├── app/            app.dart, root.dart (DB lifecycle/restore), router.dart, routes.dart, app_wiring.dart, theme/
+├── main.dart       app entry + `backgroundSyncMain` (WorkManager entrypoint, looked up by name)
+├── app/            app.dart, root.dart (DB lifecycle/restore), router.dart, shell.dart (floating navbar, AboveNavBar), routes.dart, app_wiring.dart, theme/
 ├── core/
-│   ├── database/   tables, enums, converters, seed, AppDatabase, database_cipher.dart (SQLCipher key + migration)
-│   ├── background/ background_sync.dart (WorkManager headless entry) + external_writes.dart (refresh after other connections write)
+│   ├── database/   tables, enums, converters, seed, AppDatabase, database_cipher.dart (SQLCipher key + migration), busy_wait.dart (waitWhenBusy)
+│   ├── background/ background_sync.dart (WorkManager job body) + external_writes.dart (refresh after other connections write)
 │   ├── ledger/     LedgerService — the only write path for income/expense/transfer
 │   ├── finance/    finance_math.dart (pure formulas) + FinanceService (read-side metrics)
 │   ├── notifications/, settings/, storage/, formatting/, utilities/
@@ -45,7 +46,7 @@ Cross-feature hooks live in `lib/app/app_wiring.dart`:
 
 Every isolate (app, notification actions, widget, WorkManager) opens the live database only through `openDeviceDatabase()`. Two connections may write at once: recurring generation reads and inserts in one `BEGIN IMMEDIATE` transaction, posting closes the instance conditionally in the same transaction, and connections wait on each other with a Dart busy handler (`waitWhenBusy`).
 
-The Android widget (`android/.../FinBroWidgetProvider.kt`) only displays what Dart sends over the `id.finbro.app/widget` channel (`render`). While the app runs, `WidgetSync` recomputes on the app's own DB connection after writes to `accounts`, `transactions`, `exchange_rates` or `app_settings` and on every start/resume. For system updates (widget placed, every 30 min via `updatePeriodMillis`) `WidgetCompute.kt` runs `widgetBackgroundMain` in a cached headless Flutter engine that reads the same SQLite file (never creates it).
+The Android widget (`android/.../FinBroWidgetProvider.kt`, 4×2 by default, styled like the Home "Total Balance" card: label + update time, amount, and the month's balance line) only displays what Dart sends over the `id.finbro.app/widget` channel (`render`: balance text, caption, the `FinanceService.monthBalancePath` points, negative flag and, when unmasked, detail texts + tones); Kotlin draws the line into a bitmap per widget size (`WidgetChart.kt`, monotone curve + fading fill + dots, like `BalanceSparkline`). The widget grows with its height (`tierFor`): medium adds the change line and Income | Expense, large adds Available to Spend, the highest-usage budget and the next schedule; each section opens its screen through `MainActivity` (`WidgetTarget`: Home, Analitik, Budget, Transaksi Berulang). While the app runs, `WidgetSync` recomputes on the app's own DB connection after writes to `accounts`, `transactions`, `exchange_rates`, `app_settings`, `budgets`, `categories`, `goals`, `recurring_rules` or `recurring_instances` and on every start/resume. For system updates (widget placed, every 30 min via `updatePeriodMillis`) the provider queues `WidgetRefreshWorker` (WorkManager one-time work), which runs `widgetBackgroundMain` in a fresh headless engine that reads the same SQLite file (never creates it), renders, reports `done` and is destroyed — running as work keeps the process alive until Dart has rendered. Lainnya → Pengaturan → "Widget layar utama" asks the launcher to pin it (Android 8+).
 
 ## Run / build
 
@@ -84,8 +85,8 @@ On desktop (Linux) the app runs for development. OCR, the camera, and notificati
 - Upcoming obligations = open recurring expenses due by the end of the current month.
 - Savings Rate numerator (Net Amount Saved) = net transfers into savings-type accounts from non-savings accounts. Goal contributions are earmarks and count only as goal progress, never as saved money, so nothing is counted twice (owner decision, 2 Okt 2026; replaces the earlier goals + transfers rule).
 - Account balances and Total Balance include confirmed transactions dated up to now; future-dated rows count from their date.
-- Daily check = per-date local notifications scheduled 30 days ahead and cancelled once a day is ACTIVE or NO_ACTIVITY. "Ingatkan nanti" fires once, +1 hour.
-- Budget alerts: attention 70%, warning 85%, over 100% and "melewati budget" (>100%), each at most once per period.
+- Daily check = per-date local notifications scheduled 30 days ahead and cancelled once a day is ACTIVE or NO_ACTIVITY. "Nanti" (remind later) fires once, +1 hour.
+- Budget alerts: attention 70%, warning 85%, over 100% and "melewati budget" (>100%). Each fires once while usage keeps rising in a period; a jump across several thresholds announces only the highest; if an edit/delete drops usage below a threshold, that threshold can fire again; changing the budget amount resets the level.
 - Recurring instances and auto-confirm are processed when the app opens or resumes and, since 7 Okt 2026 (owner decision), every ~6 h by WorkManager while the app is closed (battery-not-low; skipped while the app is on screen).
 - Database encryption (owner decision, 7 Okt 2026): SQLCipher with a random per-device key in Android Keystore-backed storage, never in backups. Existing plaintext databases are encrypted on first open (verified copy + atomic swap; the plaintext is kept as `finbro.sqlite.plain-pending` until a later app start reads the key back, because the key store persists asynchronously). Backups stay portable plaintext SQLite inside the zip and are re-encrypted with the device key on restore. A lost key is never answered by silently creating a new database: the user can set the unreadable file aside ("Mulai dengan database baru") and restore a backup.
 - The UI mixes Bahasa Indonesia and English financial terms, as in the mockup. Colors follow the monochrome spec, not the violet swatches in the mockup.
@@ -94,8 +95,8 @@ On desktop (Linux) the app runs for development. OCR, the camera, and notificati
 
 - Seed merchant Indonesia: implemented with scan suggestions and tests.
 - Exact notification scheduling: implemented on Android with permission check and inexact fallback; device delivery still needs validation.
-- Multi-currency with manual rates: implemented (schema v5 `exchange_rates`, 11 currencies, minor-unit amounts; amounts are entered and shown in the account's own currency (transaction/recurring/scan forms, lists, detail, PDF, CSV `currency` column); every cross-account figure — totals, day-group totals, top expenses, amount filter, budgets, goals — is converted to IDR; kurs editor at `/settings/rates`; transfers only between accounts of the same currency).
-- Android home-screen widget: implemented (4×1, Total Balance computed in Dart; `••••••` + `Terkunci` whenever the app-lock PIN is set, `Saldo disembunyikan` when the Home eye toggle hides balances; "Diperbarui <tanggal> <jam>" caption; resynced by `WidgetSync` after balance/kurs/lock/hide-balance writes and on app start/resume, and every 30 min by the headless engine).
+- Multi-currency with manual rates: implemented (schema v5 `exchange_rates`, 11 currencies, minor-unit amounts; amounts are entered and shown in the account's own currency (transaction/recurring/scan forms, lists, Home account chips, detail, PDF, CSV `currency` column); every cross-account figure — totals, day-group totals, top expenses, amount filter, budgets, goals — is converted to IDR; kurs editor at `/settings/rates` (Lainnya → Pengaturan → Kurs Mata Uang); kurs are typed in Indonesian notation (`16.250`, `105,25`); transfers only between accounts of the same currency).
+- Android home-screen widget: implemented (4×2 card like the Home balance card: "Total Balance", amount, update time, month balance line; taller sizes add change + Income/Expense, then Available to Spend, top budget and next schedule, each opening its screen; `Rp ••••••` + `Terkunci` whenever the app-lock PIN is set, `Saldo disembunyikan` when the Home eye toggle hides balances, no chart or details while masked; negative totals in red; follows system light/dark; resynced by `WidgetSync` after balance/kurs/lock/hide-balance/budget/goal/recurring writes and on app start/resume, and on placement/every 30 min by `WidgetRefreshWorker`; in-app "Widget layar utama" pin request).
 - Bank CSV import: implemented (7 bank presets + manual mapping, review screen). PDF statements: implemented (pdfrx text-layer extraction, password support). Scanned (image-only) PDFs: OCR on Android (max 30 pages, page by page at ~216 dpi, progress + cancel, review flagged "PDF scan (OCR)"); off Android they are rejected.
 - Encrypted folder backup via SAF: implemented (Backup & Restore → "Backup terenkripsi ke folder": folder, passphrase, harian/mingguan, keep 3/5/7/14/30, "Backup sekarang"; restore from `.finbro` with passphrase — a device without a backup key adopts the restored backup's key so automatic folder backups continue). Copies land under a `.partial` name and are renamed when complete, so an interrupted copy is never mistaken for a backup. Cloud sync using that format is not implemented.
 - Backup/restore memory bound removed: zip write/validate/restore and `.finbro` encrypt/decrypt stream to and from files in background isolates (limits are size caps, not memory caps).
@@ -114,7 +115,7 @@ On desktop (Linux) the app runs for development. OCR, the camera, and notificati
 - Budget alerts at 85% and 100%, no repeated alert for the same threshold.
 - App lock: wrong PIN rejected with attempt counter, correct PIN and fingerprint unlock, relock on resume.
 - Backup to Downloads via the system save dialog (manifest checksum matches), CSV export, restore preview from a picked file.
-- Pending on device: navbar/FAB position fix (FAB lifted by the bar's full height, 7 Okt), home-screen widget, multi-currency entry/display, encrypted folder backup/restore, OCR accuracy on real photographed receipts.
+- Pending on device: encrypted folder backup/restore, OCR accuracy on real photographed receipts. (Navbar/FAB, multi-currency, kurs editor, import with 2+ accounts and the 4×2 widget were checked on 7 Okt, see `STATUS.md`.)
 
 ## Implementation status (planning-pack TODO.md)
 
@@ -126,6 +127,6 @@ On desktop (Linux) the app runs for development. OCR, the camera, and notificati
 | Notifications: local service, daily check, budget threshold, recurring, salary reminder, monthly review | Done (scheduling verified in code/tests; delivery needs a device) |
 | Reports: income vs expense, spending donut, top spending bar, budget vs actual, savings rate, emergency coverage, metrics panel; monthly and yearly scope, PDF export for both | Done |
 | OCR: device OCR (ML Kit), preprocessing, receipt + screenshot parsers, merchant mapping, confidence UI, duplicate detection | Done (accuracy spike on a target device pending) |
-| Statement import: bank CSV (BCA/Mandiri/BNI/BRI/Jago/SeaBank/blu) and text-layer PDF, review screen with per-row category + include/exclude, duplicate detection, manual column mapping | Done (scanned-only PDFs rejected until OCR v2). Tests in `test/statement_import/` |
+| Statement import: bank CSV (BCA/Mandiri/BNI/BRI/Jago/SeaBank/blu) and text-layer PDF, review screen with per-row category + include/exclude, duplicate detection, manual column mapping | Done (scanned PDFs: on-device OCR on Android, max 30 pages; rejected off Android). Tests in `test/statement_import/` |
 | Reliability: backup/export, restore/import, encrypted folder backup, integrity check, app lock, local error log | Done; device performance test pending |
-| Release: seeded categories, onboarding, empty states, debug demo-data toggle + debug wipe, release keystore | Done; latest UI/widget changes still need a device check |
+| Release: seeded categories, onboarding, empty states, debug demo-data seeding + debug wipe, release keystore | Done; latest UI/widget changes still need a device check |
