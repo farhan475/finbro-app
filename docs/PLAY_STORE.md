@@ -13,15 +13,17 @@ Version: 1.0.0 (build 1)
 FinBro adalah teman keuangan pribadi yang bekerja sepenuhnya offline. Data Anda tersimpan hanya di ponsel.
 
 - Catat pemasukan, pengeluaran, dan transfer antar rekening/e-wallet/cash
+- Multi mata uang (IDR, USD, SGD, dan lainnya) dengan kurs manual; total selalu dalam rupiah
 - Total saldo dan "Available to Spend" yang jelas
-- Budget bulanan per kategori dengan peringatan di 85% dan 100%
+- Budget bulanan per kategori dengan peringatan di 70%, 85%, 100% (bisa diubah) dan saat melewati budget
 - Target keuangan: dana darurat, tabungan, dana pengembangan
 - Transaksi berulang (gaji, tagihan, langganan) dengan pengingat dan konfirmasi
 - Kalender keuangan dan pengingat catatan harian
-- Laporan: arus kas, komposisi pengeluaran, top spending, budget vs aktual
+- Laporan bulanan dan tahunan: arus kas, komposisi pengeluaran, top spending, budget vs aktual
 - Scan struk dan screenshot transaksi (OCR di perangkat) — selalu berupa draf yang Anda periksa
-- Impor mutasi rekening dari file CSV bank dengan tinjauan dan peringatan duplikat
-- Backup/restore, ekspor CSV dan PDF
+- Impor mutasi rekening dari file CSV atau PDF bank dengan tinjauan dan peringatan duplikat
+- Backup/restore, backup terenkripsi otomatis ke folder pilihan Anda, ekspor CSV dan PDF
+- Widget layar utama total saldo (tersamarkan saat kunci aplikasi aktif)
 - Kunci aplikasi PIN + sidik jari
 - Tema terang dan gelap
 
@@ -33,7 +35,7 @@ Tanpa akun. Tanpa iklan. Tanpa pelacak.
 
 **Short:** Track money, set budgets, hit goals. Offline, private, no account.
 
-**Full:** FinBro is an offline personal finance companion. Your data stays on your phone. Track income, expenses and transfers; see balance and available-to-spend; set monthly budgets with alerts; manage goals, recurring items and a financial calendar; view reports; scan receipts on-device (always a draft you review); back up/restore, export CSV/PDF; PIN + biometric lock; light/dark theme. No account, no ads, no trackers.
+**Full:** FinBro is an offline personal finance companion. Your data stays on your phone. Track income, expenses and transfers in multiple currencies (manual rates, totals in rupiah); see balance and available-to-spend; set monthly budgets with alerts; manage goals, recurring items and a financial calendar; view monthly and yearly reports; scan receipts on-device (always a draft you review); import bank statements (CSV/PDF); back up/restore, including automatic encrypted backups to a folder you choose; export CSV/PDF; home-screen balance widget (masked while the app lock is on); PIN + biometric lock; light/dark theme. No account, no ads, no trackers.
 
 ## Release notes v1.0.0
 

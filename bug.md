@@ -4,10 +4,78 @@ Status setelah penyelesaian pekerjaan codebase: lihat item aktif di bawah. `flut
 
 ## Masih terbuka
 
-- Backup dan restore memuat seluruh zip ke memori, sehingga batasnya 512 MB (zip), 256 MB per file, 1 GB total. Backup di atas batas ditolak saat dibuat. Untuk pengguna dengan sangat banyak lampiran perlu backup streaming (lihat roadmap).
+- Widget: engine headless (update sistem tiap 30 menit / saat dipasang) membuka DB yang sama dengan app; bila gagal, widget menampilkan `••••••` + "Buka FinBro untuk memperbarui" (tidak pernah angka basi). Pantau log `FinBroWidget` di perangkat.
+- Filter nominal Transaksi membandingkan nilai rupiah (kurs manual); baris struk hasil OCR (subtotal/pajak) tetap rupiah karena tidak terikat akun.
+- Sinkronisasi cloud belum dikerjakan (keputusan owner 7 Okt).
+- WorkManager dapat ditunda OS (Doze/penghemat baterai/OEM). Bila job sedang menulis backup folder lalu dihentikan, salinan `.partial` tertinggal dan dibersihkan backup berikutnya.
+- PDF mutasi yang mencampur halaman teks dan halaman scan hanya memakai text layer.
 
 ## Belum divalidasi di perangkat
-OCR struk foto asli, TalkBack, sidik jari, notifikasi di Doze dalam/OEM lain, perilaku lock baru (tombol back, fokus keyboard, batas 5 menit file picker), backup/restore dengan batas ukuran baru, impor mutasi CSV (picker di perangkat, parser terhadap file asli bank).
+OCR struk foto asli, TalkBack, sidik jari, notifikasi di Doze dalam/OEM lain, perilaku lock baru (tombol back, fokus keyboard, batas 5 menit file picker), backup/restore streaming dan **backup/restore terenkripsi folder** (UI 7 Okt), **multi-currency** (form transaksi/akun, tampilan native, kurs editor, transfer sama mata uang), **widget home screen** (mask Terkunci / Saldo disembunyikan, update setelah ubah saldo/kurs, update 30 menit, ukuran 4×1), **posisi FAB (+)** Home/Transaksi di atas navbar, **impor PDF statement** termasuk **OCR PDF hasil scan**, **WorkManager** (job berjalan dengan app tertutup), **SQLCipher** (instalasi baru, migrasi dari APK lama, restore).
+
+## Selesai (7 Okt 2026, lanjutan)
+
+- Uji emulator (multi-currency): form akun tidak mengisi kurs saat mata uang diganti (USD tampil kosong walau kurs default 16250 ada), dan saat berpindah USD → EUR kurs USD tetap di kolom lalu ikut disimpan sebagai kurs EUR. `AccountFormScreen._setCurrency` kini mengosongkan kolom dan memuat kurs tersimpan mata uang baru (abaikan hasil bila pengguna sudah berganti lagi). Regresi `test/features/accounts/account_form_kurs_test.dart`.
+- Uji emulator: jam hasil OCR "08: 02" (spasi setelah titik dua) masuk ke deskripsi → `_time` di `statement_text.dart` menerima spasi setelah ':'; regresi di `scanned_statement_ocr_test.dart`.
+- OCR PDF mutasi hasil scan (Android): `scanned_statement_ocr.dart`; ≤30 halaman, progress + Batal, file gambar sementara selalu dihapus. Test `test/statement_import/scanned_statement_ocr_test.dart` (8).
+- WorkManager: `BackgroundSyncWorker.kt` + `backgroundSyncMain`. Dua race diperbaiki di `recurring_engine.dart`: baca aturan di luar transaksi (instance jadwal lama bisa terposting dua kali bila aturan diedit bersamaan) dan hapus instance hanya berdasar id (instance yang baru di-auto-confirm job bisa dihapus lalu periode yang sama diposting lagi). Test `test/recurring/recurring_concurrency_test.dart`.
+- `PRAGMA busy_timeout` tidak menunggu saat VM profiler aktif (debug/test) → diganti busy handler Dart `waitWhenBusy`.
+- SQLCipher + perlindungan jendela kehilangan kunci (flutter_secure_storage memakai `SharedPreferences.apply()`): plaintext migrasi disimpan sebagai `.plain-pending` + penanda `.key-unconfirmed` (pid) sampai proses berikutnya membaca balik kunci; kunci yang hilang sebelum tersimpan → migrasi diulang dari plaintext atau DB baru dibuat dan file lama dipindah (`.unreadable-<waktu>`). Test `test/core/database_cipher_test.dart` (12).
+- Entrypoint widget headless tidak ditemukan (bukan di `main.dart`) → `WidgetCompute.kt` memakai URI library.
+- Salinan backup folder tidak lagi bisa setengah jadi dengan nama final (`.partial` → rename). Restore `.finbro` dengan passphrase di perangkat tanpa kunci backup kini menyimpan kunci itu.
+
+## Selesai (7 Okt 2026)
+
+### FAB (+) Home tertutup navbar
+- Penyebab: FAB Scaffold cabang diposisikan 16 dp dari bawah layar (di belakang navbar); `Transform.translate(-58)` kurang dari tinggi navbar (68 + gap 16 + inset sistem), jadi ±10 dp bagian bawah FAB tertutup dan tap jatuh ke navbar; FAB Transaksi tidak diangkat sama sekali. `navBarClearance` juga menghitung tinggi navbar dua kali.
+- Perbaikan: `AppShell` menerbitkan tinggi penuh navbar (`_NavBarScope`, satu nilai inset untuk bar dan FAB); `AboveNavBar` dipakai FAB Home dan Transaksi; `navBarClearance` = tinggi navbar + 16 (atau + 96 dengan FAB).
+- Test: `test/app/shell_fab_test.dart` (router asli, inset 0 dan 34 dp: FAB di atas navbar, tap di tepi bawah FAB mengenai FAB, baris terakhir Home tidak tertutup FAB).
+
+### Widget dimatangkan
+- Engine headless tidak punya handler `render` → snapshot Dart tidak pernah sampai ke widget. `WidgetCompute` kini mendaftarkan `WidgetChannel` pada engine tersebut.
+- `WidgetSync` (`lib/core/widget/widget_service.dart`) menggantikan `widgetRefresherProvider`: menghitung di koneksi app sendiri setelah tulis ke `accounts`/`transactions`/`exchange_rates`/`app_settings` (coalesce 300 ms, snapshot sama tidak dikirim ulang) dan saat start/resume (lifecycle task). Sebelumnya hanya commit ledger + panggilan manual, sehingga saldo awal akun, kurs, restore, onboarding, demo data tidak memperbarui widget.
+- Caption bertanggal ("Diperbarui 3 Okt 09:05"); mask sembunyikan saldo = "Saldo disembunyikan", PIN = "Terkunci"; sebelum onboarding/DB belum ada → "Rp –" + "Buka FinBro untuk mulai" tanpa membuat DB; tap membuka app sejak sebelum snapshot pertama; ukuran 4×1 sesuai dokumen; deskripsi di pemilih widget.
+- Test: `test/core/widget/widget_background_test.dart` (mask, tanggal, baris masa depan, sync setelah perubahan, tanpa kirim ulang yang tidak berubah).
+
+### Klaim dokumen yang belum ada di kode
+- Backup terenkripsi ke folder: UI di Backup & Restore + restore `.finbro`; format v2 ter-chunk, enkripsi/dekripsi streaming file-ke-file di isolate (dulu `package.readBytes()` penuh). Test `test/backup/{encrypted_backup,folder_backup_service}_test.dart`.
+- `validateFile` dulu membaca tiap entri penuh ke memori di isolate UI → kini streaming per chunk 1 MB di `Isolate.run`; `buildPackage` juga di isolate.
+- Multi-currency: input/tampilan nominal transaksi, recurring, scan, PDF, CSV mengikuti mata uang akun; total harian/top expense/filter nominal dalam rupiah.
+- Hapus semua data (debug) kini mereset kurs; pesan PDF hasil-scan tidak lagi menyiratkan bisa dibaca di Android.
+
+## Selesai (3 Okt 2026)
+
+### Multi-currency (roadmap)
+- Skema v5: tabel `exchange_rates` (kurs manual rupiah per unit, CHECK > 0) + enum `Currency` (11 kode). Migrasi v4→v5 menambah tabel + seed kurs default; instalasi baru seed sama di `seedDefaults`.
+- Model konversi: amount tersimpan minor unit (IDR/JPY satuan; lainnya sen). Konversi SQL `ROUND(amount × rate_to_idr ÷ 10^decimals)` per baris lewat subselect kurs akun masing-masing. IDR→IDR identik dengan perilaku lama.
+- `FinanceService`: semua agregat lintas akun (total balance, summary, ATS, dana darurat, net saved, trend, spending by category, budget aktual, upcoming obligations) dikonversi ke IDR; `AccountBalance.idrBalance` untuk tampilan per akun.
+- `LedgerService`: transfer lintas mata uang ditolak dengan pesan jelas.
+- UI: form akun pilih mata uang + kurs (+ preview ≈Rp), daftar/detail akun tampil native + ≈Rp, editor kurs di Pengaturan → Kurs Mata Uang, `MoneyField`/`formatMoney`/`parseMoney` per desimal mata uang.
+- Test: `test/core/currency_migration_test.dart`, `test/core/finance_currency_test.dart`, `test/core/money_format_test.dart`, `test/features/accounts/account_currency_test.dart`.
+
+### Widget home screen (roadmap)
+- Widget 4×1 Android: `FinBroWidgetProvider.kt` (RemoteViews), `WidgetCompute.kt` (headless Flutter engine ter-cache, entrypoint `widgetBackgroundMain`), channel `id.finbro.app/widget`. (Alur refresh diperbaiki 7 Okt, lihat di atas.)
+- Snapshot dihitung Dart murni dari DB (unit-testable di Linux): total balance dari `FinanceService.totalBalance`; mask `••••••` bila PIN aktif ATAU toggle sembunyikan saldo aktif — Kotlin tidak pernah menampilkan angka yang tidak dikirim Dart.
+- Test: `test/core/widget/widget_background_test.dart`.
+
+### Impor statement PDF (roadmap)
+- Ekstraksi text-layer dengan pdfrx (PDFium native di isolate-nya sendiri; komposisi baris via `Isolate.run`): parser baris statement (`parseStatementLines`) membaca layout BCA/Mandiri (timestamp, MUTASI DEBET/KREDIT/SALDO, deskripsi terpotong); furniture halaman difilter.
+- PDF terenkripsi: dialog kata sandi hingga 3 percobaan, batal aman; PDF hasil-scan (tanpa text layer) awalnya ditolak — OCR-nya selesai 7 Okt (lihat di atas).
+- Review/commit/duplikat berbagi alur CSV (`/import`). Test: `test/statement_import/pdf_statement_test.dart`.
+
+### Backup/restore streaming (batas memori dihapus)
+- `buildPackage` menulis zip langsung ke file (`_StreamingZipWriter`, STORE, CRC streaming); tidak lagi memuat seluruh zip ke memori. (Enkripsi folder dari file dan isolate menyusul 7 Okt.)
+- `BackupService.validateFile(File)` menggantikan validasi byte: staging per entri ke direktori sementara, cek nama aman, batas entry/total, CRC per entri, checksum SHA-256 dari manifest. `ValidatedBackup` kini file-backed (`sqliteFile`, `files`, `ownedDirectory`) dengan `dispose()`.
+- Restore UI/flow memakai `restoreFromFile` (file picker langsung ke file), dispose di semua jalur (batal, gagal, selesai). (`restoreFromBytes` dihapus 7 Okt; tidak punya pemanggil.)
+- Instalasi backup: `installBackup` menerima `ValidatedBackup` file-backed; lampiran disalin per file.
+- Paket backup berada di direktori kerja aplikasi; gagal build tidak meninggalkan file; `dispose()` menghapus paket sementara.
+- Pubspec menambah `convert` (sink hash streaming).
+- Test: seluruh `test/backup` dimigrasi ke API file (writeZip → validateFile; ValidatedBackup file-backed; tamper CRC via patch byte zip langsung). Suite penuh 259 lulus, `flutter analyze` bersih.
+
+### Hash PIN terikat Android Keystore (audit long-term)
+- `PinVerifierChannel.kt`: HMAC-SHA256 dengan kunci non-ekspor di AndroidKeyStore (`finbro.app_lock.pin_binding.v1`), perbandingan constant-time; kegagalan Keystore eksplisit (`PinIntegrityException`), tidak pernah downgrade ke verifier database saja.
+- Dart: `setPin`/`verifyPin`/`changePin`/`disable` melewati binding; hash legacy tanpa binding dimigrasi otomatis setelah PIN benar. PIN hash/salt tidak ikut backup (LOCK-003).
+- Test: `pin_hash_test.dart` — binding tersimpan, verifikasi gagal eksplisit bila binding tidak cocok, cooldown tetap bekerja.
 
 ## Selesai (2 Okt 2026)
 
@@ -29,7 +97,7 @@ OCR struk foto asli, TalkBack, sidik jari, notifikasi di Doze dalam/OEM lain, pe
 ### Platform / stabilitas
 - Safety snapshot tidak menimpa; salt+hash PIN satu transaksi; limiter PIN persisten bertingkat.
 - Onboarding menjadwalkan daily check; reminder lama dibatalkan setelah restore; `root.dart` membuka ulang DB jika `close()` gagal; handler notifikasi background menangkap error; `LogScreen`/`BackupScreen` cek `mounted`, error CSV/baca/hapus backup ditangani.
-- Zip encode/validate/sha256 berjalan di `Isolate.run`.
+- Zip encode/validate/sha256 berjalan di `Isolate.run` (validate per entri streaming sejak 7 Okt).
 
 ### Performa
 - `dbChangesProvider` per tabel + coalesce 32 ms; tidak ada tulisan no-op saat resume.

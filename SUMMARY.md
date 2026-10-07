@@ -1,37 +1,58 @@
 # FinBro Implementation Summary
 
-Date: 2 Oktober 2026 · Version 1.0.0+1 · Application ID `id.finbro.app`
-Verified: `flutter analyze` clean. Full suite: 253 tests passing (2 Okt 2026, includes 6 new statement-import tests). Device release UI is not verified; see `STATUS.md`.
+Date: 7 Oktober 2026 · Version 1.0.0+1 · Application ID `id.finbro.app`
+Verified: `flutter analyze` clean. Full suite: **355 tests passing** (7 Okt 2026). Emulator (Pixel 8 Pro, Android 17) checks passed for the features changed 2–7 Okt; a physical-device release check is still pending; see `STATUS.md`.
 
 Spec: planning pack in `~/Downloads/finebro app/`. Details and decisions: `README.md`. Release readiness and open work: `STATUS.md`.
 
 ## Implemented (all planning-pack MVP phases 0–6)
 
-- Foundation: Flutter, Drift SQLite (schema v3 = frozen v1 baseline in `drift_schemas/` + query indexes and stepwise migrations; migration tests in `test/core/schema_migration_test.dart`), Riverpod, go_router, light/dark theme from the UI reference (`~/Downloads/finebro app/FinBro_Contoh_UI.png`): monochrome surfaces + lime accent `#5BEB12`, Inter font, monochrome logo/icon.
+- Foundation: Flutter, Drift SQLite (schema v5 = frozen v1 baseline in `drift_schemas/` + query indexes and stepwise migrations; migration tests in `test/core/schema_migration_test.dart`), Riverpod, go_router, light/dark theme from the UI reference (`~/Downloads/finebro app/FinBro_Contoh_UI.png`): monochrome surfaces + lime accent `#5BEB12`, Inter font, monochrome logo/icon.
 - Navigation: bottom bar Home | Transaksi | Budget | Analitik (Laporan) | Lainnya; Tujuan Keuangan opens from Lainnya and the Home goals card.
-- Data: accounts, categories (seeded), transactions, attachments, budgets, goals + goal_movements, recurring rules/instances, daily_activity, planning_settings, app_settings, merchant_mappings.
+- Data: accounts, categories (seeded), transactions, attachments, budgets, goals (optionally linked to a Savings account, schema v3) + goal_movements, recurring rules/instances, daily_activity, planning_settings, app_settings, merchant_mappings, exchange_rates.
 - Logic: ledger as the single write path; balances (confirmed rows dated up to now), available-to-spend, emergency fund, savings rate (net transfers into Savings accounts), budget usage, upcoming obligations (`lib/core/finance`).
-- Features: account/category CRUD (archived accounts reject new postings), income/expense/transfer, filter/search, edit/delete/duplicate, account reconciliation, budgets, goals, recurring (weekly/monthly/yearly/custom interval, H/H-1/H-3 reminders) with confirm/skip/auto-confirm, calendar, planning settings, onboarding, empty states, demo data (debug).
-- Reports: income vs expense, spending donut, top spending, budget vs actual, metrics panel (N/A on zero denominators), CSV export, PDF monthly report export.
+- Features: account/category CRUD (archived accounts reject new postings), income/expense/transfer, filter/search, edit/delete/duplicate, account reconciliation, budgets with 70/85/100% (per-budget editable) and over-budget alerts, goals, recurring (weekly/monthly/yearly/custom interval, H/H-1/H-3 reminders, salary preset) with confirm/skip/auto-confirm, calendar, planning settings, onboarding, empty states, demo data + full wipe (debug).
+- Reports: monthly and yearly scope — income vs expense, spending donut, top spending, budget vs actual, metrics panel (N/A on zero denominators), CSV export (with `currency` column), PDF report export (monthly or yearly).
 - Notifications (`flutter_local_notifications`, exact scheduling with inexact fallback when permission is unavailable, boot receiver): daily check with actions, budget thresholds, recurring/salary reminders, monthly review.
 - Scan: ML Kit on-device OCR (camera, receipt from gallery, screenshot from gallery), preprocessing, crop step, receipt + screenshot parsers, confidence, merchant mapping, duplicate detection, draft review.
-- Statement import: bank CSV from BCA, Mandiri, BNI, BRI, Jago, SeaBank, blu (parser presets + manual column mapping), entry via Lainnya → Impor Mutasi Bank (`/import`), review screen with per-row include/exclude + category, duplicate warning against existing transactions, rows post as confirmed with source `statement_import` (`lib/features/statement_import`, tests in `test/statement_import/`). PDF statements: not supported.
-- Security/reliability: PIN + biometric app lock (persistent escalating limiter, monotonic relock, FLAG_SECURE), ZIP backup/restore with manifest + checksum, schema/trigger/size validation and safety snapshot, integrity check (incl. missing/orphan attachments), local error log, backup reminder banner (>30 days or never) on Home, Lainnya and Settings. No network permissions in release.
+- Statement import: bank CSV from BCA, Mandiri, BNI, BRI, Jago, SeaBank, blu (parser presets + manual column mapping), entry via Lainnya → Impor Mutasi Bank (`/import`), review screen with per-row include/exclude + category, duplicate warning against existing transactions, rows post as confirmed with source `statement_import` (`lib/features/statement_import`, tests in `test/statement_import/`). PDF statements: text-layer extraction with pdfrx (password dialog, 3 attempts); scanned-only PDFs are read with on-device OCR on Android (max 30 pages).
+- Multi-currency: accounts in 11 currencies (`Currency` enum), manual kurs per currency (`exchange_rates`, schema v5) editable in Pengaturan → Kurs Mata Uang; amounts stored as integer minor units and entered/shown in the account's currency (transaction, recurring and scan forms, lists, detail, PDF, CSV); all cross-account figures (total balance, ATS, emergency, savings rate, budgets, goals, day totals, top expenses, amount filter, reports) converted to rupiah; per-account screens show native amount + ≈Rp; transfers only between accounts of the same currency. (`lib/core/formatting/money.dart`, `FinanceService.idrSql`, `lib/features/settings/presentation/exchange_rates_screen.dart`.)
+- Home-screen widget: Android 4×1 widget showing Total Balance and "Diperbarui <tanggal> <jam>" (`FinBroWidgetProvider.kt`); masked `••••••` + `Terkunci` whenever the app lock PIN is set, `Saldo disembunyikan` with the Home eye toggle. While the app runs `WidgetSync` re-renders after writes to accounts/transactions/kurs/settings and on start/resume; the OS refreshes every 30 min through the headless Dart engine (`WidgetCompute` → `widgetBackgroundMain`).
+- Security/reliability: PIN + biometric app lock (persistent escalating limiter, monotonic relock, FLAG_SECURE in release builds, PIN hash bound to a non-exportable Android Keystore HMAC key with automatic legacy migration), ZIP backup/restore fully streaming/file-backed in background isolates with manifest + DB & per-attachment SHA-256 + per-entry CRC32 verification, schema/trigger/size validation and safety snapshot, encrypted `.finbro` backups (AES-256-GCM chunked, Argon2id passphrase) to a user-chosen SAF folder on a daily/weekly schedule with retention 3–30 plus encrypted restore, integrity check (incl. missing/orphan attachments and post-restore checksum mismatches), local error log, backup reminder banner (>30 days or never) on Home, Lainnya and Settings. No network permissions in release.
 - Release: signed AAB/APKs (keystore in `~/finbro-keys/`), `docs/PRIVACY_POLICY.md`, `docs/PLAY_STORE.md`, CI (`.github/workflows/ci.yml`).
 
 ## UI follow-up
 
 - Floating navbar uses a frosted glass surface. Active destination highlights icon and label with the accent only; no selected pill background.
-- Home add FAB was moved higher and the scroll clearance increased after the user reported it overlapped the navbar. The latest release UI still needs a successful on-device visual check; see `STATUS.md`.
+- Branch FABs (Home, Transaksi) use `AboveNavBar`, which lifts them by the bar's full height published by the shell (`_NavBarScope`: bar + gap + system inset). The earlier `Transform.translate(-58)` left the Home FAB ~10 dp behind the bar (more with a 3-button/gesture inset); fixed 7 Okt with regression test `test/app/shell_fab_test.dart`. List padding uses `navBarClearance` from the same value. Needs an on-device visual check; see `STATUS.md`.
+
+## Change log 7 Oktober 2026 (lanjutan: fitur yang ditunda)
+
+- Scanned PDF statements: OCR on Android (pdfrx renders each page, ML Kit reads it, same statement line parser and review flow; max 30 pages, progress + cancel; review flagged "PDF scan (OCR)"). `lib/features/statement_import/domain/scanned_statement_ocr.dart`, tests `test/statement_import/scanned_statement_ocr_test.dart`.
+- Background work: WorkManager `BackgroundSyncWorker.kt` (periodic 6 h, battery-not-low, skipped while the app is on screen) runs `backgroundSyncMain` → recurring sync incl. auto-confirm with budget alerts, daily-check reschedule, widget render, due folder backup. Recurring generation made safe for two connections; tests `test/recurring/recurring_concurrency_test.dart`, `test/background/external_writes_test.dart`.
+- SQLCipher: live database encrypted (random 256-bit key in flutter_secure_storage); plaintext installs migrated on first open with a verified copy and the plaintext kept until a later process confirms the key; backups stay plaintext and are re-encrypted on restore; error screen offers "Mulai dengan database baru" (old file kept) when the key is gone. Tests `test/core/database_cipher_test.dart`, `test/backup/backup_service_test.dart`.
+- Folder backups are copied under `.partial` and renamed when complete; leftovers are cleaned. `.finbro` restore on a device without a backup key adopts the backup's key.
+- Widget headless entrypoint is now resolved by library URI (`package:finbro_app/core/widget/widget_background.dart`); before, the engine could not find `widgetBackgroundMain` outside `main.dart`.
+
+## Change log 7 Oktober 2026
+
+Docs ↔ code sync; everything the docs claimed is now in code.
+
+- Fixed: Home/Transaksi add FAB hidden behind the navbar (see UI follow-up).
+- Widget matured: the headless engine had no `render` handler, so Dart snapshots never reached the widget; refresh now follows all balance/kurs/lock/hide-balance/onboarding writes plus start/resume (was ledger commits only); dated caption; distinct hidden vs locked mask; no DB creation before first launch; 4×1 sizing, tap-to-open before the first snapshot, picker description.
+- Encrypted folder backup UI + `.finbro` restore; format v2 chunked/streaming.
+- Multi-currency completed for entry/display of account-bound amounts.
+- Backup validation stages entries by streaming in an isolate; build also in an isolate; legacy byte APIs removed.
+- Debug wipe also resets kurs to defaults; scanned-PDF message corrected (OCR for scanned PDFs followed later the same day).
 
 ## Change log 2 Oktober 2026
 
 All open items from the 4-agent audit closed; details in `bug.md`, `audit.md`, `CHANGELOG.md`.
 
-- Statement import (latest this session): bank CSV import wired end-to-end — route `/import` with entry in Lainnya, review screen (include/exclude, per-row category, duplicate badge, manual column mapping), commit through `LedgerService` with `sourceType: statement_import`, 6 tests (`test/statement_import/`). PDF statements remain out of scope.
+- Statement import (latest this session): bank CSV import wired end-to-end — route `/import` with entry in Lainnya, review screen (include/exclude, per-row category, duplicate badge, manual column mapping), commit through `LedgerService` with `sourceType: statement_import`, 6 tests (`test/statement_import/`). PDF statements followed on 3 Okt.
 
 - Money: future-dated rows excluded from balances; Net Amount Saved = net transfers into Savings accounts only (owner decision); development allocation ignores goal adjustments; emergency average over months with history; budget end date = whole calendar day; auto-confirmed recurring delete stays deleted; form keeps attachments safe while saving.
-- Security: relock on monotonic + wall clock with a 5-minute cap for pickers/dialogs; lock blocks focus and Back; restore validates `user_version`, tables, drops triggers/views; backup size limits, unknown entries rejected, zip work off the UI isolate; CSV tab/CR neutralized.
+- Security: relock on monotonic + wall clock with a 5-minute cap for pickers/dialogs; lock blocks focus and Back; restore validates `user_version`, tables, drops triggers/views; backup size limits, unknown entries rejected; CSV tab/CR neutralized.
 - Performance: recurring reminders diffed; Home balance computed once; batched budget usage and trend queries; cursor pagination (`TransactionPager`) on Transaksi and account detail.
 - CI signs release builds with a throwaway key.
 
@@ -61,10 +82,10 @@ All open items from the 4-agent audit closed; details in `bug.md`, `audit.md`, `
 
 ## Known limits (by design)
 
-- Single device, no sync/cloud yet (encrypted folder backup exists; offline-first sync is pending roadmap work). Backup is manual unless the user configures folder backups.
+- Single device, no sync/cloud yet (encrypted folder backup exists; offline-first sync is pending roadmap work). Backup is manual unless the user configures the encrypted folder backup.
 - Exact reminders are supported when Android permission is allowed; otherwise scheduling falls back to inexact alarms. Delivery timing varies by device/Doze and needs validation.
-- No SQLCipher: OS storage protection plus app lock.
-- Recurring processing runs on app open/resume; no background service.
+- Live database encrypted with SQLCipher (per-device key); manual backup zips are plaintext for portability.
+- Recurring processing runs on app open/resume and every ~6 h via WorkManager while the app is closed (OS may defer it under Doze/battery saver).
 - Onboarding allocation steps by 5%; finer values in Settings → Planning.
 
 ## Build
