@@ -8,6 +8,7 @@ import '../../../core/providers.dart';
 import '../../../core/utilities/app_logger.dart';
 import '../../scanner/domain/merchant_text.dart';
 import 'csv_statement_parser.dart';
+import 'statement_line_parser.dart';
 import 'statement_models.dart';
 
 /// One parsed statement row shown for review, plus its duplicate check.
@@ -76,6 +77,25 @@ class StatementImportService {
     final parse = parseCsvStatement(a, a.mapping, now: now);
     this.accountId = accountId;
     analysis = a;
+    categoryIds = {};
+    excluded = {};
+    candidates = [for (final r in parse.rows) ImportCandidate(row: r)];
+    _skipped = parse.skippedLines;
+    await _refreshDuplicates();
+  }
+
+  /// Prepares review candidates from statement lines already extracted as
+  /// text (PDF import; [parseStatementLines] also drives the OCR path).
+  /// No CSV analysis exists, so the review screen hides the column mapping.
+  Future<void> loadParsedLines(
+    List<String> lines, {
+    required String accountId,
+    required DateTime now,
+    String? formatLabel = 'PDF',
+  }) async {
+    final parse = parseStatementLines(lines, now: now, formatLabel: formatLabel);
+    this.accountId = accountId;
+    analysis = null;
     categoryIds = {};
     excluded = {};
     candidates = [for (final r in parse.rows) ImportCandidate(row: r)];

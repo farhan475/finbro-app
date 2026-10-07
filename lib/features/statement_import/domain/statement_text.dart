@@ -143,7 +143,8 @@ final _numeric = RegExp(r'^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4}|\d{2})(?![\d])');
 final _numericNoYear = RegExp(r'^(\d{1,2})[/\-.](\d{1,2})(?![\d/\-.,])');
 final _named = RegExp(r'^(\d{1,2})[\s\-/]*([A-Za-z]{3,9})\.?[\s\-/,]*(\d{4}|\d{2})(?![\d.,:])');
 final _namedNoYear = RegExp(r'^(\d{1,2})[\s\-/]*([A-Za-z]{3,9})\.?(?![A-Za-z])');
-final _time = RegExp(r'^(?:\s*,?\s*|T)(\d{1,2})[:.](\d{2})(?:[:.](\d{2}))?(?![\d])');
+// OCR often reads "08:02" as "08: 02"; a space is accepted after ':' only.
+final _time = RegExp(r'^(?:\s*,?\s*|T)(\d{1,2})(?::\s?|\.)(\d{2})(?:[:.](\d{2}))?(?![\d])');
 
 /// Reads a date at the start of [raw] (after optional whitespace and the
 /// leading apostrophe spreadsheet exports put before `'01/09`):
