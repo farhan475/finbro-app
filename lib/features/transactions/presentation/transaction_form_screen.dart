@@ -98,7 +98,9 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
         } else {
           _original = tx;
           _type = tx.type;
-          _amount.text = MoneyField.textFor(tx.amount);
+          final account =
+              await (db.select(db.accounts)..where((a) => a.id.equals(tx.accountId))).getSingleOrNull();
+          _amount.text = MoneyField.textFor(tx.amount, Currency.fromCode(account?.currency ?? 'IDR'));
           _categoryId = tx.categoryId;
           _accountId = tx.accountId;
           _toAccountId = tx.transferToAccountId;
@@ -142,9 +144,33 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
     return choices.firstWhereOrNull((a) => a.id != _toAccountId)?.id ?? choices.firstOrNull?.id;
   }
 
+  /// Destination of a transfer: never [source] and always in the source
+  /// account's currency (the ledger rejects cross-currency transfers).
+  List<Account> _destinationChoices(List<Account> choices, String? source) {
+    final currency = choices.firstWhereOrNull((a) => a.id == source)?.currency;
+    return [
+      for (final a in choices)
+        if (a.id != source && (currency == null || a.currency == currency)) a,
+    ];
+  }
+
   String? _resolvedDestination(List<Account> choices, String? source) {
-    if (_toAccountId != source && choices.any((a) => a.id == _toAccountId)) return _toAccountId;
-    return choices.firstWhereOrNull((a) => a.id != source)?.id;
+    final dest = _destinationChoices(choices, source);
+    if (dest.any((a) => a.id == _toAccountId)) return _toAccountId;
+    return dest.firstOrNull?.id;
+  }
+
+  static Currency _currencyOf(List<Account> choices, String? id) =>
+      Currency.fromCode(choices.firstWhereOrNull((a) => a.id == id)?.currency ?? 'IDR');
+
+  /// Account switch: the typed amount follows [MoneyField.switchCurrency]
+  /// (kept when exactly representable in the new currency, else cleared).
+  void _selectAccount(List<Account> choices, String id) {
+    final from = _currencyOf(choices, _resolvedAccount(choices));
+    setState(() {
+      _accountId = id;
+      MoneyField.switchCurrency(_amount, from, _currencyOf(choices, id));
+    });
   }
 
   CategoryType get _categoryType =>
@@ -232,7 +258,7 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
     _pending.clear();
     final draft = TransactionDraft(
       type: _type,
-      amount: parseRupiah(_amount.text) ?? 0,
+      amount: parseMoney(_amount.text, _currencyOf(choices, accountId)) ?? 0,
       accountId: accountId,
       categoryId: isTransfer ? null : _categoryId,
       transferToAccountId: isTransfer ? _resolvedDestination(choices, accountId) : null,
@@ -357,7 +383,13 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
             children: [
-              _AmountInput(controller: _amount, focusNode: _amountFocus, autofocus: !widget.isEdit, type: _type),
+              _AmountInput(
+                controller: _amount,
+                focusNode: _amountFocus,
+                autofocus: !widget.isEdit,
+                type: _type,
+                currency: _currencyOf(choices, accountId),
+              ),
               const SizedBox(height: 16),
               SegmentedButton<TransactionType>(
                 segments: const [
@@ -394,15 +426,18 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
               _AccountPicker(
                 accounts: choices,
                 selectedId: accountId,
-                onSelected: (id) => setState(() => _accountId = id),
+                onSelected: (id) => _selectAccount(choices, id),
               ),
               if (isTransfer) ...[
                 const SectionHeader('Ke account'),
-                if (choices.length < 2)
-                  Text('Transfer butuh minimal dua account.', style: context.text.bodySmall)
+                if (_destinationChoices(choices, accountId).isEmpty)
+                  Text(
+                    'Transfer butuh account lain dengan mata uang yang sama.',
+                    style: context.text.bodySmall,
+                  )
                 else
                   _AccountPicker(
-                    accounts: [for (final a in choices) if (a.id != accountId) a],
+                    accounts: _destinationChoices(choices, accountId),
                     selectedId: destinationId,
                     onSelected: (id) => setState(() => _toAccountId = id),
                   ),
@@ -523,15 +558,23 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
   }
 }
 
-/// Large amount input with rupiah grouping; keeps its own focus node so
-/// "Simpan & tambah lagi" can jump straight back to it.
+/// Large amount input in the selected account's currency (rupiah grouping
+/// for IDR, decimals for e.g. USD); keeps its own focus node so "Simpan &
+/// tambah lagi" can jump straight back to it.
 class _AmountInput extends StatelessWidget {
-  const _AmountInput({required this.controller, required this.focusNode, required this.autofocus, required this.type});
+  const _AmountInput({
+    required this.controller,
+    required this.focusNode,
+    required this.autofocus,
+    required this.type,
+    required this.currency,
+  });
 
   final TextEditingController controller;
   final FocusNode focusNode;
   final bool autofocus;
   final TransactionType type;
+  final Currency currency;
 
   @override
   Widget build(BuildContext context) {
@@ -547,11 +590,13 @@ class _AmountInput extends StatelessWidget {
             controller: controller,
             focusNode: focusNode,
             autofocus: autofocus,
-            keyboardType: TextInputType.number,
-            inputFormatters: [RupiahInputFormatter()],
+            keyboardType: currency.decimals > 0
+                ? const TextInputType.numberWithOptions(decimal: true)
+                : TextInputType.number,
+            inputFormatters: [RupiahInputFormatter(currency: currency)],
             style: style,
             decoration: InputDecoration(
-              prefixText: 'Rp ',
+              prefixText: '${currency.symbol} ',
               prefixStyle: style.copyWith(color: fin.muted),
               hintText: '0',
               hintStyle: style.copyWith(color: fin.border),
@@ -564,7 +609,7 @@ class _AmountInput extends StatelessWidget {
               contentPadding: const EdgeInsets.symmetric(vertical: 8),
             ),
             validator: (text) {
-              final v = parseRupiah(text ?? '');
+              final v = parseMoney(text ?? '', currency);
               if (v == null || v <= 0) return 'Masukkan nominal lebih dari 0';
               return null;
             },

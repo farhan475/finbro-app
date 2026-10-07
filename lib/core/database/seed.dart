@@ -51,6 +51,36 @@ abstract final class SystemCategories {
   static const family = 'sys-expense-family';
 }
 
+/// Default manual rates: rupiah per 1 unit of the currency code.
+const _defaultRates = <String, double>{
+  'USD': 16250.0,
+  'SGD': 12250.0,
+  'MYR': 3750.0,
+  'EUR': 17250.0,
+  'GBP': 20200.0,
+  'JPY': 105.0,
+  'AUD': 10400.0,
+  'CHF': 17900.0,
+  'CNY': 2200.0,
+  'HKD': 2030.0,
+};
+
+/// Inserts the default exchange rates (schema v5). Used both by
+/// [seedDefaults] on fresh installs and by the v5 migration step; rows that
+/// already exist are left untouched so user-edited rates survive.
+Future<void> seedExchangeRates(AppDatabase db) async {
+  final now = DateTime.now();
+  await db.batch((b) {
+    _defaultRates.forEach((code, rate) {
+      b.insert(
+        db.exchangeRates,
+        ExchangeRatesCompanion.insert(code: code, rateToIdr: rate, updatedAt: Value(now)),
+        mode: InsertMode.insertOrIgnore,
+      );
+    });
+  });
+}
+
 Future<void> seedDefaults(AppDatabase db) async {
   final now = DateTime.now();
   await db.batch((b) {
@@ -99,4 +129,5 @@ Future<void> seedDefaults(AppDatabase db) async {
       ),
     );
   });
+  await seedExchangeRates(db);
 }

@@ -115,8 +115,9 @@ class DemoData {
     return created;
   }
 
-  /// Deletes every row and attachment file, then re-seeds default categories
-  /// and planning. Onboarding starts again because app_settings is cleared.
+  /// Deletes every row and attachment file, then re-seeds default categories,
+  /// planning and kurs. Onboarding starts again because app_settings is
+  /// cleared.
   Future<void> wipeAll() async {
     await db.transaction(() async {
       for (final table in <TableInfo<Table, Object?>>[
@@ -134,6 +135,7 @@ class DemoData {
         db.dailyActivity,
         db.backups,
         db.appSettings,
+        db.exchangeRates,
       ]) {
         await db.delete(table).go();
       }

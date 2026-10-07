@@ -158,3 +158,33 @@ enum ActivityStatus implements DbEnum {
   @override
   final String db;
 }
+
+/// Supported currencies. `db` is the lowercase ISO code, matching the plain
+/// TEXT `accounts.currency` column (default 'IDR') — no converter needed.
+enum Currency implements DbEnum {
+  idr('IDR', 'Rp', 'Rupiah', 0),
+  usd('USD', '\$', 'US Dollar', 2),
+  sgd('SGD', 'S\$', 'Singapore Dollar', 2),
+  myr('MYR', 'RM', 'Malaysian Ringgit', 2),
+  eur('EUR', '€', 'Euro', 2),
+  gbp('GBP', '£', 'British Pound', 2),
+  jpy('JPY', '¥', 'Japanese Yen', 0),
+  aud('AUD', 'A\$', 'Australian Dollar', 2),
+  chf('CHF', 'Fr', 'Swiss Franc', 2),
+  cny('CNY', '¥', 'Chinese Yuan', 2),
+  hkd('HKD', 'HK\$', 'Hong Kong Dollar', 2);
+
+  const Currency(this.code, this.symbol, this.displayName, this.decimals);
+  @override
+  String get db => code.toLowerCase();
+  final String code;
+  final String symbol;
+  final String displayName;
+  final int decimals;
+
+  /// Parses a stored/canonical code ('usd', 'USD'); unknown → IDR.
+  static Currency fromCode(String code) => Currency.values.firstWhere(
+    (c) => c.code == code.toUpperCase(),
+    orElse: () => Currency.idr,
+  );
+}

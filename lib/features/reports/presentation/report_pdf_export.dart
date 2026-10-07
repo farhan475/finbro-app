@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pdf/widgets.dart' as pw;
 
+import '../../../core/database/enums.dart';
 import '../../../core/providers.dart';
 import '../../../core/utilities/app_logger.dart';
 import '../../../shared/providers/lookups.dart';
@@ -23,6 +24,7 @@ Future<ReportPdfData> loadReportPdfData(WidgetRef ref, ReportQuery query) async 
   final health = monthly ? await ref.read(healthDataProvider(query.anchor).future) : null;
   final categories = await ref.read(allCategoriesProvider.future);
   final names = {for (final c in categories) c.id: c.name};
+  final accounts = {for (final a in await ref.read(allAccountsProvider.future)) a.id: a};
   return ReportPdfData(
     title: periodTitle(query.scope, query.anchor),
     scope: query.scope,
@@ -36,7 +38,13 @@ Future<ReportPdfData> loadReportPdfData(WidgetRef ref, ReportQuery query) async 
     categories: overview.categories,
     topTransactions: [
       for (final t in overview.topTransactions)
-        PdfTransactionRow(at: t.transactionAt, category: names[t.categoryId] ?? '-', note: t.note, amount: t.amount),
+        PdfTransactionRow(
+          at: t.transactionAt,
+          category: names[t.categoryId] ?? '-',
+          note: t.note,
+          amount: t.amount,
+          currency: Currency.fromCode(accounts[t.accountId]?.currency ?? 'IDR'),
+        ),
     ],
     budgets: budgets ?? const [],
     health: health == null ? const [] : buildHealthMetrics(health.metrics, health.plan),

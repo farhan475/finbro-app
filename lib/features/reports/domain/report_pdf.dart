@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
+import '../../../core/database/enums.dart';
 import '../../../core/finance/finance_math.dart';
 import '../../../core/finance/finance_service.dart';
 import '../../../core/formatting/dates.dart';
@@ -15,11 +16,20 @@ import 'report_shaping.dart';
 
 /// One row of the top-transactions table.
 class PdfTransactionRow {
-  const PdfTransactionRow({required this.at, required this.category, required this.note, required this.amount});
+  const PdfTransactionRow({
+    required this.at,
+    required this.category,
+    required this.note,
+    required this.amount,
+    this.currency = Currency.idr,
+  });
   final DateTime at;
   final String category;
   final String? note;
+
+  /// Minor units of [currency] (the transaction's account currency).
   final int amount;
+  final Currency currency;
 }
 
 class ReportPdfData {
@@ -212,7 +222,7 @@ Future<Uint8List> buildReportPdf(ReportPdfData d, {required pw.Font regular, req
               ['Tanggal', 'Kategori', 'Catatan', 'Jumlah'],
               [
                 for (final t in d.topTransactions)
-                  [formatDay(t.at), t.category, t.note ?? '-', formatRupiah(t.amount)],
+                  [formatDay(t.at), t.category, t.note ?? '-', formatMoney(t.amount, t.currency)],
               ],
               right: {3},
               flex: {0: 1, 1: 1, 2: 1.8, 3: 1.1},

@@ -62,6 +62,7 @@ class AccountRepository {
     required AccountType type,
     required int openingBalance,
     String? icon,
+    Currency currency = Currency.idr,
   }) async {
     final id = newId();
     await db.transaction(() async {
@@ -74,6 +75,7 @@ class AccountRepository {
           type: type,
           icon: Value(_cleanIcon(icon)),
           openingBalance: Value(openingBalance),
+          currency: Value(currency.code),
           createdAt: now,
           updatedAt: now,
         ),
@@ -88,6 +90,7 @@ class AccountRepository {
     required AccountType type,
     required int openingBalance,
     String? icon,
+    Currency currency = Currency.idr,
   }) async {
     await db.transaction(() async {
       await _get(id);
@@ -98,6 +101,7 @@ class AccountRepository {
           type: Value(type),
           icon: Value(_cleanIcon(icon)),
           openingBalance: Value(openingBalance),
+          currency: Value(currency.code),
           updatedAt: Value(DateTime.now()),
         ),
       );

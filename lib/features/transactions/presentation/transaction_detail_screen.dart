@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import '../../../app/routes.dart';
 import '../../../app/theme/app_theme.dart';
 import '../../../core/database/app_database.dart';
+import '../../../core/finance/finance_math.dart';
+import '../../../core/finance/finance_service.dart';
 import '../../../core/formatting/dates.dart';
 import '../../../core/formatting/money.dart';
 import '../../../core/ledger/ledger_service.dart';
@@ -54,11 +56,14 @@ class _TransactionDetailScreenState extends ConsumerState<TransactionDetailScree
     context.pushReplacement(Routes.transactionDetail(id));
   }, 'Gagal menduplikasi transaksi.');
 
+  Currency _currencyOf(LedgerTransaction tx) =>
+      Currency.fromCode(ref.read(accountMapProvider)[tx.accountId]?.currency ?? 'IDR');
+
   Future<void> _delete(LedgerTransaction tx) async {
     final ok = await confirmDialog(
       context,
       title: 'Hapus transaksi?',
-      message: 'Transaksi ${formatRupiah(tx.amount)} beserta lampirannya akan dihapus permanen. '
+      message: 'Transaksi ${formatMoney(tx.amount, _currencyOf(tx))} beserta lampirannya akan dihapus permanen. '
           'Saldo account dihitung ulang.',
       confirmLabel: 'Hapus',
       destructive: true,
@@ -137,6 +142,8 @@ class _TransactionDetailScreenState extends ConsumerState<TransactionDetailScree
       TransactionType.expense => -tx.amount,
       TransactionType.transfer => tx.amount,
     };
+    final currency = Currency.fromCode(accounts[tx.accountId]?.currency ?? 'IDR');
+    final rates = ref.watch(exchangeRateMapProvider).value ?? const <String, double>{};
     String accountName(String? id) {
       final a = accounts[id];
       if (a == null) return '-';
@@ -191,9 +198,15 @@ class _TransactionDetailScreenState extends ConsumerState<TransactionDetailScree
                   signed,
                   colorize: tx.type == TransactionType.income,
                   signed: !isTransfer,
+                  currency: currency,
                   style: context.text.displaySmall,
                 ),
               ),
+              if (currency != Currency.idr)
+                Text(
+                  '${currency.code} · ≈ ${formatRupiah(toIdr(tx.amount, currency, rates[currency.code]))}',
+                  style: context.text.bodySmall!.copyWith(color: fin.muted),
+                ),
             ],
           ),
         ),

@@ -2,6 +2,18 @@
 
 import '../database/enums.dart';
 
+/// [minor] units of [c] → whole rupiah at [rateToIdr] (rupiah per 1 unit),
+/// rounded like FinanceService's SQL conversion. A missing rate falls back
+/// to 1.0, also matching the SQL; IDR is returned unchanged.
+int toIdr(int minor, Currency c, double? rateToIdr) {
+  if (c == Currency.idr) return minor;
+  var divisor = 1;
+  for (var i = 0; i < c.decimals; i++) {
+    divisor *= 10;
+  }
+  return (minor * (rateToIdr ?? 1.0) / divisor).round();
+}
+
 /// `part / whole × 100`; null when [whole] is 0 (never show a fake %).
 double? ratioPercent(num part, num whole) => whole == 0 ? null : part / whole * 100;
 

@@ -161,6 +161,7 @@ class _Summary extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final fin = context.fin;
     final isIncome = rule.type == TransactionType.income;
+    final currency = Currency.fromCode(ref.watch(accountMapProvider)[rule.accountId]?.currency ?? 'IDR');
     final account = ref.watch(accountMapProvider)[rule.accountId]?.name ?? '-';
     final category = ref.watch(categoryMapProvider)[rule.categoryId]?.name ?? '-';
     final end = rule.endDate;
@@ -191,6 +192,7 @@ class _Summary extends ConsumerWidget {
               isIncome ? rule.amount : -rule.amount,
               colorize: isIncome,
               signed: true,
+              currency: currency,
               style: context.text.headlineSmall,
             ),
           ),

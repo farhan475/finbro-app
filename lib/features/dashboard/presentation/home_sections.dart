@@ -108,6 +108,7 @@ class UpcomingCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final now = ref.watch(clockProvider)();
     final categories = ref.watch(categoryMapProvider);
+    final accounts = ref.watch(accountMapProvider);
     return FinCard(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       onTap: () => context.push(Routes.recurring),
@@ -123,7 +124,13 @@ class UpcomingCard extends ConsumerWidget {
           }
           return Column(
             children: [
-              for (final item in items) _UpcomingRow(item: item, now: now, category: categories[item.rule.categoryId]),
+              for (final item in items)
+                _UpcomingRow(
+                  item: item,
+                  now: now,
+                  category: categories[item.rule.categoryId],
+                  currency: Currency.fromCode(accounts[item.rule.accountId]?.currency ?? 'IDR'),
+                ),
             ],
           );
         },
@@ -133,10 +140,11 @@ class UpcomingCard extends ConsumerWidget {
 }
 
 class _UpcomingRow extends StatelessWidget {
-  const _UpcomingRow({required this.item, required this.now, required this.category});
+  const _UpcomingRow({required this.item, required this.now, required this.category, required this.currency});
   final UpcomingItem item;
   final DateTime now;
   final Category? category;
+  final Currency currency;
 
   @override
   Widget build(BuildContext context) {
@@ -168,6 +176,7 @@ class _UpcomingRow extends StatelessWidget {
             income ? instance.amount : -instance.amount,
             colorize: income,
             signed: true,
+            currency: currency,
             style: context.text.titleSmall,
           ),
         ],

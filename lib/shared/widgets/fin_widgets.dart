@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../app/theme/app_theme.dart';
+import '../../core/database/enums.dart';
 import '../../core/finance/finance_math.dart';
 import '../../core/formatting/money.dart';
 
@@ -40,9 +41,10 @@ class SegmentLabel extends StatelessWidget {
       FittedBox(fit: BoxFit.scaleDown, child: Text(text, maxLines: 1, softWrap: false));
 }
 
-/// Rupiah amount. [colorize] tints positive/negative, always with a sign so
-/// state is not conveyed by color alone. [alertNegative] tints only a
-/// negative value red (balances, net cash flow); expense amounts stay neutral.
+/// Money amount in minor units of [currency] (rupiah by default). [colorize]
+/// tints positive/negative, always with a sign so state is not conveyed by
+/// color alone. [alertNegative] tints only a negative value red (balances,
+/// net cash flow); expense amounts stay neutral.
 class AmountText extends StatelessWidget {
   const AmountText(
     this.amount, {
@@ -51,6 +53,7 @@ class AmountText extends StatelessWidget {
     this.colorize = false,
     this.signed = false,
     this.alertNegative = false,
+    this.currency = Currency.idr,
   });
 
   final int amount;
@@ -58,6 +61,7 @@ class AmountText extends StatelessWidget {
   final bool colorize;
   final bool signed;
   final bool alertNegative;
+  final Currency currency;
 
   @override
   Widget build(BuildContext context) {
@@ -66,7 +70,7 @@ class AmountText extends StatelessWidget {
         ? (amount > 0 ? fin.positive : fin.negative)
         : (alertNegative && amount < 0 ? fin.negative : null);
     return Text(
-      formatRupiah(amount, signed: signed || colorize),
+      formatMoney(amount, currency, signed: signed || colorize),
       style: (style ?? context.text.bodyMedium)!.copyWith(
         color: color,
         fontFeatures: const [FontFeature.tabularFigures()],
@@ -229,8 +233,19 @@ final _thousands = NumberFormat.decimalPattern('id_ID');
 
 /// Formats digits as `1.250.000` while typing.
 class RupiahInputFormatter extends TextInputFormatter {
+  const RupiahInputFormatter({this.currency = Currency.idr});
+
+  /// Currencies with a minor unit keep the user's separators ('.'/'*', last
+  /// one wins as decimal mark via [parseMoney]) instead of regrouping to
+  /// thousands while typing; IDR regroups exactly as before.
+  final Currency currency;
+
   @override
   TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    if (currency.decimals > 0) {
+      final t = newValue.text.replaceAll(RegExp(r'[^\d.,]'), '');
+      return TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length));
+    }
     final v = parseRupiah(newValue.text);
     if (v == null) return const TextEditingValue();
     final text = _thousands.format(v);
@@ -241,7 +256,10 @@ class RupiahInputFormatter extends TextInputFormatter {
   }
 }
 
-/// Amount input in rupiah. Read the value with `parseRupiah(controller.text)`.
+/// Amount input in minor units of [currency] (rupiah by default). Read the
+/// value with `parseMoney(controller.text, currency)`; for IDR this equals
+/// `parseRupiah`. Currencies with a minor unit accept decimals (last
+/// separator = decimal mark).
 class MoneyField extends StatelessWidget {
   const MoneyField({
     super.key,
@@ -251,6 +269,7 @@ class MoneyField extends StatelessWidget {
     this.large = false,
     this.validator,
     this.allowZero = false,
+    this.currency = Currency.idr,
   });
 
   final TextEditingController controller;
@@ -259,8 +278,34 @@ class MoneyField extends StatelessWidget {
   final bool large;
   final bool allowZero;
   final String? Function(int? value)? validator;
+  final Currency currency;
 
-  static String textFor(int amount) => _thousands.format(amount);
+  /// Field text for [amount] minor units of [currency]: `1.250.000` for
+  /// IDR, `12,50` for USD (round-trips through [parseMoney]).
+  static String textFor(int amount, [Currency currency = Currency.idr]) {
+    if (currency.decimals == 0) return _thousands.format(amount);
+    var divisor = 1;
+    for (var i = 0; i < currency.decimals; i++) {
+      divisor *= 10;
+    }
+    return NumberFormat('#,##0.${'0' * currency.decimals}', 'id_ID').format(amount / divisor);
+  }
+
+  /// Re-renders [controller]'s amount when the bound account switches from
+  /// [from] to [to]: the typed nominal is kept when exactly representable
+  /// in [to] (`12` → `12,00`; `12,50` USD → `12,50` EUR) and cleared
+  /// otherwise (`12,50` USD → IDR), never silently rounded.
+  static void switchCurrency(TextEditingController controller, Currency from, Currency to) {
+    if (from == to) return;
+    final minor = parseMoney(controller.text, from);
+    if (minor == null) return;
+    final scaled = rescaleMinor(minor, from, to);
+    if (scaled == null) {
+      controller.clear();
+    } else {
+      controller.text = textFor(scaled, to);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -268,12 +313,14 @@ class MoneyField extends StatelessWidget {
     return TextFormField(
       controller: controller,
       autofocus: autofocus,
-      keyboardType: TextInputType.number,
-      inputFormatters: [RupiahInputFormatter()],
+      keyboardType: currency.decimals > 0
+          ? const TextInputType.numberWithOptions(decimal: true)
+          : TextInputType.number,
+      inputFormatters: [RupiahInputFormatter(currency: currency)],
       style: style!.copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
-      decoration: InputDecoration(labelText: label, prefixText: 'Rp '),
+      decoration: InputDecoration(labelText: label, prefixText: '${currency.symbol} '),
       validator: (text) {
-        final v = parseRupiah(text ?? '');
+        final v = parseMoney(text ?? '', currency);
         if (validator != null) return validator!(v);
         if (v == null || (!allowZero && v <= 0)) return 'Masukkan nominal';
         return null;

@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/theme/app_theme.dart';
 import '../../../core/database/app_database.dart';
 import '../../../core/finance/finance_service.dart';
+import '../../../core/formatting/money.dart';
 import '../../../shared/widgets/category_icon.dart';
 import '../../../shared/widgets/fin_widgets.dart';
 import '../../transactions/ledger_paths.dart';
@@ -54,7 +55,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
           }
           final active = [for (final b in all) if (b.account.isActive) b];
           final archived = [for (final b in all) if (!b.account.isActive) b];
-          final total = active.fold<int>(0, (s, b) => s + b.balance);
+          final total = active.fold<int>(0, (s, b) => s + b.idrBalance);
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
             children: [
@@ -125,6 +126,8 @@ class AccountRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final a = item.account;
+    final currency = currencyFromCode(a.currency);
+    final isForeign = currency != null && currency != Currency.idr;
     return InkWell(
       onTap: () => context.push(LedgerPaths.accountDetail(a.id)),
       child: Padding(
@@ -144,6 +147,8 @@ class AccountRow extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
+                  if (a.currency != 'IDR')
+                    Text(a.currency, style: context.text.bodySmall, maxLines: 1, overflow: TextOverflow.ellipsis),
                 ],
               ),
             ),
@@ -151,7 +156,28 @@ class AccountRow extends StatelessWidget {
             Flexible(
               child: Align(
                 alignment: Alignment.centerRight,
-                child: AmountText(item.balance, alertNegative: true, style: context.text.titleSmall),
+                child: isForeign
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            formatMoney(item.balance, currency),
+                            style: context.text.titleSmall!.copyWith(
+                              fontFeatures: const [FontFeature.tabularFigures()],
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            '≈ ${formatRupiah(item.idrBalance)}',
+                            style: context.text.bodySmall!.copyWith(color: context.fin.muted),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      )
+                    : AmountText(item.balance, alertNegative: true, style: context.text.titleSmall),
               ),
             ),
           ],

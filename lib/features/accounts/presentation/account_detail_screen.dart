@@ -130,11 +130,12 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
     final draft = r.adjustment(account.id, ref.read(clockProvider)());
     if (draft == null) return;
     final kind = draft.type == TransactionType.income ? 'income (Other Income)' : 'expense (Other)';
+    final currency = currencyFromCode(account.currency) ?? Currency.idr;
     final ok = await confirmDialog(
       context,
       title: 'Buat transaksi penyesuaian?',
-      message: 'FinBro akan mencatat $kind sebesar ${formatRupiah(draft.amount)} dengan catatan '
-          '"$reconciliationNote" sehingga saldo ${account.name} menjadi ${formatRupiah(r.actual)}.',
+      message: 'FinBro akan mencatat $kind sebesar ${formatMoney(draft.amount, currency)} dengan catatan '
+          '"$reconciliationNote" sehingga saldo ${account.name} menjadi ${formatMoney(r.actual, currency)}.',
       confirmLabel: 'Buat',
     );
     if (!ok) return;
@@ -181,7 +182,10 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
   Widget _body(BuildContext context, Account account) {
     final fin = context.fin;
     final balances = ref.watch(accountBalancesProvider(true)).value;
-    final balance = balances?.where((b) => b.account.id == account.id).firstOrNull?.balance;
+    final row = balances?.where((b) => b.account.id == account.id).firstOrNull;
+    final balance = row?.balance;
+    final idrBalance = row?.idrBalance;
+    final currency = currencyFromCode(account.currency) ?? Currency.idr;
     final pageAsync = _pager.watch(ref, TransactionFilter(accountIds: {account.id}));
 
     return ListView(
@@ -216,10 +220,10 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
                 FittedBox(
                   fit: BoxFit.scaleDown,
                   alignment: Alignment.centerLeft,
-                  child: AmountText(balance, alertNegative: true, style: context.text.displaySmall),
+                  child: _DetailAmount(account: account, balance: balance, idrBalance: idrBalance),
                 ),
               const SizedBox(height: 4),
-              Text('Saldo awal ${formatRupiah(account.openingBalance)}', style: context.text.bodySmall),
+              Text('Saldo awal ${formatMoney(account.openingBalance, currency)}', style: context.text.bodySmall),
             ],
           ),
         ),
@@ -246,6 +250,7 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
           const SectionHeader('Rekonsiliasi'),
           _ReconciliationCard(
             controller: _actual,
+            currency: currency,
             calculated: balance,
             canAdjust: account.isActive && !_busy,
             onAdjust: (r) => _postAdjustment(account, r),
@@ -262,7 +267,7 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
             onAction: account.isActive ? () => context.push(LedgerPaths.transactionNewForAccount(account.id)) : null,
           )
         else ...[
-          ...dayGroupWidgets(context, groupByDay(_pager.rows)),
+          ...dayGroupWidgets(context, groupByDay(_pager.rows, idrOf: watchIdrConverter(ref))),
           if (_pager.hasMore)
             Padding(
               padding: const EdgeInsets.only(top: 12),
@@ -281,12 +286,14 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
 class _ReconciliationCard extends StatelessWidget {
   const _ReconciliationCard({
     required this.controller,
+    required this.currency,
     required this.calculated,
     required this.canAdjust,
     required this.onAdjust,
   });
 
   final TextEditingController controller;
+  final Currency currency;
   final int calculated;
   final bool canAdjust;
   final ValueChanged<Reconciliation> onAdjust;
@@ -303,11 +310,17 @@ class _ReconciliationCard extends StatelessWidget {
             style: context.text.bodySmall,
           ),
           const SizedBox(height: 12),
-          MoneyField(controller: controller, label: 'Saldo aktual', allowZero: true, validator: (_) => null),
+          MoneyField(
+            controller: controller,
+            label: 'Saldo aktual',
+            allowZero: true,
+            currency: currency,
+            validator: (_) => null,
+          ),
           ListenableBuilder(
             listenable: controller,
             builder: (context, _) {
-              final actual = parseRupiah(controller.text);
+              final actual = parseMoney(controller.text, currency);
               if (actual == null) return const SizedBox.shrink();
               final r = Reconciliation(calculated: calculated, actual: actual);
               final v = r.variance;
@@ -321,11 +334,11 @@ class _ReconciliationCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _Line('Calculated', AmountText(calculated, style: context.text.bodyMedium)),
-                    _Line('Aktual', AmountText(actual, style: context.text.bodyMedium)),
+                    _Line('Calculated', AmountText(calculated, currency: currency, style: context.text.bodyMedium)),
+                    _Line('Aktual', AmountText(actual, currency: currency, style: context.text.bodyMedium)),
                     _Line(
                       'Selisih',
-                      AmountText(v, colorize: true, style: context.text.titleSmall),
+                      AmountText(v, colorize: true, currency: currency, style: context.text.titleSmall),
                     ),
                     const SizedBox(height: 6),
                     Text(
@@ -365,4 +378,41 @@ class _Line extends StatelessWidget {
       ],
     ),
   );
+}
+
+/// Calculated Balance in the account's own currency; non-IDR accounts add the
+/// kurs and the rupiah equivalent below it (schema v5, kurs manual).
+class _DetailAmount extends StatelessWidget {
+  const _DetailAmount({required this.account, required this.balance, required this.idrBalance});
+
+  final Account account;
+  final int balance;
+  final int? idrBalance;
+
+  @override
+  Widget build(BuildContext context) {
+    final currency = currencyFromCode(account.currency) ?? Currency.idr;
+    if (currency == Currency.idr) {
+      return AmountText(balance, alertNegative: true, style: context.text.displaySmall);
+    }
+    final idr = idrBalance ?? balance;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          formatMoney(balance, currency),
+          style: context.text.displaySmall!.copyWith(
+            color: balance < 0 ? context.fin.negative : null,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        Text(
+          '${currency.code} account · ≈ ${formatRupiah(idr)}',
+          style: context.text.bodySmall!.copyWith(color: context.fin.muted),
+        ),
+      ],
+    );
+  }
 }

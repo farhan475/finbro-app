@@ -322,6 +322,14 @@ class LedgerService {
       if (!dest.isActive && !destUnchanged) {
         throw LedgerValidationException('Account ${dest.name} sudah diarsipkan.');
       }
+      // Kurs bersifat manual dan tidak ada konversi otomatis antar sisi
+      // transfer: sisi penerima mencatat transfer masuknya sendiri.
+      if (account.currency != dest.currency) {
+        throw const LedgerValidationException(
+          'Transfer antar mata uang berbeda belum didukung. '
+          'Pindahkan via dua transaksi atau samakan mata uang akun.',
+        );
+      }
       return;
     }
 

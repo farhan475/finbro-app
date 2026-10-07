@@ -81,7 +81,8 @@ class InstanceTile extends ConsumerWidget {
     final fin = context.fin;
     final inst = view.instance;
     final rule = view.rule;
-    final account = ref.watch(accountMapProvider)[rule.accountId]?.name ?? '-';
+    final accountRow = ref.watch(accountMapProvider)[rule.accountId];
+    final account = accountRow?.name ?? '-';
     final open = inst.status.isOpen;
     final today = dateOnly(ref.watch(clockProvider)());
     final overdue = inst.status == RecurringStatus.pending && inst.dueDate.isBefore(today);
@@ -143,7 +144,13 @@ class InstanceTile extends ConsumerWidget {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    AmountText(view.signedAmount, colorize: isIncome, signed: true, style: context.text.titleSmall),
+                    AmountText(
+                      view.signedAmount,
+                      colorize: isIncome,
+                      signed: true,
+                      currency: Currency.fromCode(accountRow?.currency ?? 'IDR'),
+                      style: context.text.titleSmall,
+                    ),
                     const SizedBox(height: 4),
                     if (showRuleName || overdue)
                       StatusPill(
@@ -260,11 +267,18 @@ class _ConfirmInstanceSheetState extends ConsumerState<ConfirmInstanceSheet> {
   void initState() {
     super.initState();
     final inst = widget.view.instance;
-    _amount = TextEditingController(text: MoneyField.textFor(inst.amount))..addListener(() => setState(() {}));
+    _amount = TextEditingController(text: MoneyField.textFor(inst.amount, _ruleCurrency))
+      ..addListener(() => setState(() {}));
     final today = dateOnly(ref.read(clockProvider)());
     _date = inst.dueDate.isAfter(today) ? today : inst.dueDate;
     _accountId = widget.view.rule.accountId;
   }
+
+  Currency _currencyOf(String? accountId) =>
+      Currency.fromCode(ref.read(accountMapProvider)[accountId]?.currency ?? 'IDR');
+
+  /// Currency of the scheduled amount (the rule's account).
+  Currency get _ruleCurrency => _currencyOf(widget.view.rule.accountId);
 
   @override
   void dispose() {
@@ -289,7 +303,7 @@ class _ConfirmInstanceSheetState extends ConsumerState<ConfirmInstanceSheet> {
     try {
       final id = await ref.read(recurringEngineProvider).confirm(
         widget.view.instance.id,
-        amount: parseRupiah(_amount.text),
+        amount: parseMoney(_amount.text, _currencyOf(_accountId)),
         date: _date,
         accountId: _accountId,
       );
@@ -309,6 +323,7 @@ class _ConfirmInstanceSheetState extends ConsumerState<ConfirmInstanceSheet> {
     final rule = widget.view.rule;
     final accounts = ref.watch(activeAccountsProvider);
     final hasAccount = accounts.any((a) => a.id == _accountId);
+    final currency = Currency.fromCode(ref.watch(accountMapProvider)[_accountId]?.currency ?? 'IDR');
     final isIncome = rule.type == TransactionType.income;
     return Padding(
       padding: EdgeInsets.only(
@@ -330,7 +345,7 @@ class _ConfirmInstanceSheetState extends ConsumerState<ConfirmInstanceSheet> {
               style: context.text.bodySmall,
             ),
             const SizedBox(height: 16),
-            MoneyField(controller: _amount, large: true),
+            MoneyField(controller: _amount, large: true, currency: currency),
             const SizedBox(height: 12),
             InkWell(
               onTap: _pickDate,
@@ -349,7 +364,10 @@ class _ConfirmInstanceSheetState extends ConsumerState<ConfirmInstanceSheet> {
                 for (final a in accounts)
                   DropdownMenuItem(value: a.id, child: Text(a.name, overflow: TextOverflow.ellipsis)),
               ],
-              onChanged: (v) => setState(() => _accountId = v),
+              onChanged: (v) => setState(() {
+                MoneyField.switchCurrency(_amount, _currencyOf(_accountId), _currencyOf(v));
+                _accountId = v;
+              }),
               validator: (v) => v == null ? 'Pilih account' : null,
             ),
             const SizedBox(height: 20),
@@ -359,11 +377,12 @@ class _ConfirmInstanceSheetState extends ConsumerState<ConfirmInstanceSheet> {
                   ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                   : const Text('Konfirmasi'),
             ),
-            if (_amount.text.isNotEmpty && parseRupiah(_amount.text) != widget.view.instance.amount)
+            if (_amount.text.isNotEmpty &&
+                (currency != _ruleCurrency || parseMoney(_amount.text, currency) != widget.view.instance.amount))
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
-                  'Jadwal: ${formatRupiah(widget.view.instance.amount)}',
+                  'Jadwal: ${formatMoney(widget.view.instance.amount, _ruleCurrency)}',
                   style: context.text.bodySmall,
                   textAlign: TextAlign.center,
                 ),

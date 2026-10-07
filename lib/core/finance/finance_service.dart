@@ -11,10 +11,23 @@ final financeServiceProvider = Provider<FinanceService>(
   (ref) => FinanceService(ref.watch(databaseProvider), clock: ref.watch(clockProvider)),
 );
 
+/// Manual kurs per currency code (`USD` → rupiah per 1 USD), live.
+final exchangeRateMapProvider = StreamProvider<Map<String, double>>((ref) {
+  final db = ref.watch(databaseProvider);
+  return db.select(db.exchangeRates).watch().map((rows) => {for (final r in rows) r.code: r.rateToIdr});
+});
+
 class AccountBalance {
-  const AccountBalance(this.account, this.balance);
+  const AccountBalance(this.account, this.balance, {required this.idrBalance});
   final Account account;
   final int balance;
+
+  /// [balance] converted to rupiah at the account's manual kurs
+  /// (schema v5 `exchange_rates.rate_to_idr`). Same as [balance] for IDR.
+  final int idrBalance;
+
+  /// Display-agnostic access: use this for cross-account totals.
+  int get inBase => idrBalance;
 }
 
 class PeriodSummary {
@@ -117,6 +130,9 @@ class EmergencyStatus {
 class GoalProgress {
   const GoalProgress({required this.goal, required this.saved, this.linkedAccount});
   final Goal goal;
+
+  /// Rupiah, like [Goal.targetAmount]: a goal linked to a non-IDR account
+  /// converts that balance at the account's manual kurs.
   final int saved;
 
   /// Linked account (active or archived); null for a movements-based goal.
@@ -189,27 +205,62 @@ class FinanceService {
         WHERE t.transfer_to_account_id = $acc AND t.type = 'transfer' AND t.$_confirmed
           AND t.transaction_at <= ?1), 0)''';
 
+  /// Kurs manual (schema v5): rupiah per 1 SATU unit mata uang akun [t] (`t`
+  /// is a SQL alias of `accounts`). Kode disimpan uppercase sama dengan
+  /// `exchange_rates.code`; row hilang fallback 1.0 (perilaku IDR lama).
+  static String _rateOfAccountSql(String acc) =>
+      'COALESCE((SELECT r.rate_to_idr FROM exchange_rates r WHERE r.code = '
+      '(SELECT acc_x.currency FROM accounts acc_x WHERE acc_x.id = $acc)), 1.0)';
+
+  /// Divisor minor-unit untuk kode mata uang [code] (SQL expression):
+  /// amount disimpan dalam satuan minor (USD 1024 = $10.24), rate adalah
+  /// rupiah per 1 utuh. IDR/JPY (decimals 0) divisor 1 — disejajarkan dengan
+  /// [Currency.decimals] di enums.dart.
+  static String _divisorOfSql(String code) =>
+      "CASE WHEN ($code) IN ('IDR', 'JPY') THEN 1.0 ELSE 100.0 END";
+
+  static String _currencyOfAccountSql(String acc) =>
+      '(SELECT acc_x.currency FROM accounts acc_x WHERE acc_x.id = $acc)';
+
+  /// [amount] (minor units) milik akun bernama [acc] (SQL expression yang
+  /// resolve ke account id, mis. `a.id` atau `t.account_id`) → whole rupiah:
+  /// ROUND(minor × rate / divisor), rate & divisor dari mata uang akun tsb.
+  static String idrSql(String amount, String acc) => 'CAST(ROUND(($amount) * '
+      '(${_rateOfAccountSql(acc)}) / (${_divisorOfSql(_currencyOfAccountSql(acc))})) AS INTEGER)';
+
   /// Goals `g` with their linked account `la` (null when unlinked).
   static const _goalsJoin = 'goals g LEFT JOIN accounts la ON la.id = g.linked_account_id';
 
-  /// The one goal progress rule ([GoalProgress]) over [_goalsJoin], as of `?1`.
-  static final _goalSavedSql =
+  /// The one goal progress rule ([GoalProgress]) over [_goalsJoin], as of
+  /// `?1`, in rupiah: a goal linked to a non-IDR account converts at that
+  /// account's manual kurs; unlinked goals stay IDR (owner rule).
+  static final _goalSavedIdrSql =
       'CASE WHEN la.id IS NULL THEN g.current_amount '
-      "ELSE ${_balanceSql('la.id', 'la.opening_balance')} END";
+      "ELSE ${idrSql(_balanceSql('la.id', 'la.opening_balance'), 'la.id')} END";
 
-  /// §2 Calculated Balance per account (replayed from transactions).
+  /// §2 Calculated Balance per account (replayed from transactions), plus the
+  /// same balance converted to rupiah at the account's manual kurs.
   Future<List<AccountBalance>> accountBalances({bool includeArchived = false}) async {
     final rows = await db.customSelect(
-      'SELECT a.id AS id, ${_balanceSql('a.id', 'a.opening_balance')} AS balance FROM accounts a',
+      'SELECT a.id AS id, ${_balanceSql('a.id', 'a.opening_balance')} AS balance, '
+      '${idrSql(_balanceSql('a.id', 'a.opening_balance'), 'a.id')} AS idr_balance '
+      'FROM accounts a',
       variables: [Variable(sqlDateTime(_clock()))],
-      readsFrom: {db.accounts, db.transactions},
+      readsFrom: {db.accounts, db.transactions, db.exchangeRates},
     ).get();
-    final balances = {for (final r in rows) r.read<String>('id'): r.read<int>('balance')};
+    final balances = {for (final r in rows) r.read<String>('id'): (r.read<int>('balance'), r.read<int>('idr_balance'))};
     final q = db.select(db.accounts)
       ..orderBy([(a) => OrderingTerm.asc(a.createdAt)]);
     if (!includeArchived) q.where((a) => a.isActive.equals(true));
     final accounts = await q.get();
-    return [for (final a in accounts) AccountBalance(a, balances[a.id] ?? a.openingBalance)];
+    return [
+      for (final a in accounts)
+        AccountBalance(
+          a,
+          balances[a.id]?.$1 ?? a.openingBalance,
+          idrBalance: balances[a.id]?.$2 ?? a.openingBalance,
+        ),
+    ];
   }
 
   /// Goals with their progress ([GoalProgress]), priority DESC then oldest
@@ -223,9 +274,9 @@ class FinanceService {
     final goals = await q.get();
     if (goals.isEmpty) return const [];
     final rows = await db.customSelect(
-      'SELECT g.id AS id, $_goalSavedSql AS saved FROM $_goalsJoin',
+      'SELECT g.id AS id, $_goalSavedIdrSql AS saved FROM $_goalsJoin',
       variables: [Variable(sqlDateTime(_clock()))],
-      readsFrom: {db.goals, db.accounts, db.transactions},
+      readsFrom: {db.goals, db.accounts, db.transactions, db.exchangeRates},
     ).get();
     final saved = {for (final r in rows) r.read<String>('id'): r.read<int>('saved')};
     final linkedIds = {for (final g in goals) ?g.linkedAccountId};
@@ -245,23 +296,33 @@ class FinanceService {
     ];
   }
 
-  /// §3 Total Balance (active accounts only).
+  /// §3 Total Balance (active accounts only), reported in rupiah: balances of
+  /// non-IDR accounts are converted at their manual kurs (schema v5).
   Future<int> totalBalance() async =>
-      (await accountBalances()).fold<int>(0, (s, b) => s + b.balance);
+      (await accountBalances()).fold<int>(0, (s, b) => s + b.idrBalance);
 
-  /// §5–§7 for a period.
-  Future<PeriodSummary> summary(Period p) async {
-    final rows = await db.customSelect(
-      '''
+  /// §5–§7 for a period, in rupiah: rows on non-IDR accounts convert at the
+  /// account's manual kurs (schema v5).
+  Future<PeriodSummary> summary(Period p) => _summaryWhere(
+    't.transaction_at >= ? AND t.transaction_at < ?',
+    [sqlDateTime(p.start), sqlDateTime(p.end)],
+  );
+
+  /// Income/expense sums in rupiah over [where] (params bound in [args]).
+  Future<PeriodSummary> _summaryWhere(String where, List<Object?> args) async {
+    final rows = await db
+        .customSelect(
+          '''
       SELECT
-        COALESCE(SUM(CASE WHEN type = 'income' THEN amount END), 0) AS income,
-        COALESCE(SUM(CASE WHEN type = 'expense' THEN amount END), 0) AS expense
-      FROM transactions
-      WHERE $_confirmed AND transaction_at >= ? AND transaction_at < ?
+        COALESCE(SUM(CASE WHEN t.type = 'income' THEN ${idrSql('t.amount', 't.account_id')} END), 0) AS income,
+        COALESCE(SUM(CASE WHEN t.type = 'expense' THEN ${idrSql('t.amount', 't.account_id')} END), 0) AS expense
+      FROM transactions t
+      WHERE t.$_confirmed AND $where
       ''',
-      variables: [Variable(sqlDateTime(p.start)), Variable(sqlDateTime(p.end))],
-      readsFrom: {db.transactions},
-    ).getSingle();
+          variables: [for (final a in args) Variable(a)],
+          readsFrom: {db.transactions, db.accounts, db.exchangeRates},
+        )
+        .getSingle();
     return PeriodSummary(income: rows.read<int>('income'), expense: rows.read<int>('expense'));
   }
 
@@ -269,14 +330,15 @@ class FinanceService {
   Future<List<CategoryAmount>> spendingByCategory(Period p) async {
     final rows = await db.customSelect(
       '''
-      SELECT c.id AS id, c.name AS name, c.icon AS icon, SUM(t.amount) AS total
+      SELECT c.id AS id, c.name AS name, c.icon AS icon,
+        SUM(${idrSql('t.amount', 't.account_id')}) AS total
       FROM transactions t JOIN categories c ON c.id = t.category_id
       WHERE t.type = 'expense' AND t.$_confirmed
         AND t.transaction_at >= ? AND t.transaction_at < ?
       GROUP BY c.id ORDER BY total DESC
       ''',
       variables: [Variable(sqlDateTime(p.start)), Variable(sqlDateTime(p.end))],
-      readsFrom: {db.transactions, db.categories},
+      readsFrom: {db.transactions, db.categories, db.accounts, db.exchangeRates},
     ).get();
     final total = rows.fold<int>(0, (s, r) => s + r.read<int>('total'));
     return [
@@ -291,8 +353,11 @@ class FinanceService {
     ];
   }
 
-  /// FR-RPT-003 largest expense transactions.
+  /// FR-RPT-003 largest expense transactions, ranked by their rupiah value
+  /// (non-IDR rows convert at their account's manual kurs). Rows keep their
+  /// native minor-unit amount; display with the account's currency.
   Future<List<LedgerTransaction>> topExpenses(Period p, {int limit = 5}) {
+    final idr = CustomExpression<int>(idrSql('transactions.amount', 'transactions.account_id'));
     return (db.select(db.transactions)
           ..where(
             (t) =>
@@ -301,7 +366,7 @@ class FinanceService {
                 t.transactionAt.isBiggerOrEqualValue(sqlDateTime(p.start)) &
                 t.transactionAt.isSmallerThanValue(sqlDateTime(p.end)),
           )
-          ..orderBy([(t) => OrderingTerm.desc(t.amount)])
+          ..orderBy([(_) => OrderingTerm.desc(idr), (t) => OrderingTerm.desc(t.amount)])
           ..limit(limit))
         .get();
   }
@@ -311,15 +376,15 @@ class FinanceService {
     final first = DateTime(now.year, now.month - (months - 1));
     final rows = await db.customSelect(
       '''
-      SELECT substr(transaction_at, 1, 7) AS month,
-        COALESCE(SUM(CASE WHEN type = 'income' THEN amount END), 0) AS income,
-        COALESCE(SUM(CASE WHEN type = 'expense' THEN amount END), 0) AS expense
-      FROM transactions
-      WHERE $_confirmed AND transaction_at >= ? AND transaction_at < ?
+      SELECT substr(t.transaction_at, 1, 7) AS month,
+        COALESCE(SUM(CASE WHEN t.type = 'income' THEN ${idrSql('t.amount', 't.account_id')} END), 0) AS income,
+        COALESCE(SUM(CASE WHEN t.type = 'expense' THEN ${idrSql('t.amount', 't.account_id')} END), 0) AS expense
+      FROM transactions t
+      WHERE t.$_confirmed AND t.transaction_at >= ? AND t.transaction_at < ?
       GROUP BY month
       ''',
       variables: [Variable(sqlDateTime(first)), Variable(sqlDateTime(nextMonthStart(now)))],
-      readsFrom: {db.transactions},
+      readsFrom: {db.transactions, db.accounts, db.exchangeRates},
     ).get();
     final byMonth = {for (final r in rows) r.read<String>('month'): r};
     final out = <MonthPoint>[];
@@ -335,15 +400,15 @@ class FinanceService {
   Future<Map<DateTime, PeriodSummary>> dailyTotals(Period p) async {
     final rows = await db.customSelect(
       '''
-      SELECT substr(transaction_at, 1, 10) AS day,
-        COALESCE(SUM(CASE WHEN type = 'income' THEN amount END), 0) AS income,
-        COALESCE(SUM(CASE WHEN type = 'expense' THEN amount END), 0) AS expense
-      FROM transactions
-      WHERE $_confirmed AND transaction_at >= ? AND transaction_at < ?
+      SELECT substr(t.transaction_at, 1, 10) AS day,
+        COALESCE(SUM(CASE WHEN t.type = 'income' THEN ${idrSql('t.amount', 't.account_id')} END), 0) AS income,
+        COALESCE(SUM(CASE WHEN t.type = 'expense' THEN ${idrSql('t.amount', 't.account_id')} END), 0) AS expense
+      FROM transactions t
+      WHERE t.$_confirmed AND t.transaction_at >= ? AND t.transaction_at < ?
       GROUP BY day
       ''',
       variables: [Variable(sqlDateTime(p.start)), Variable(sqlDateTime(p.end))],
-      readsFrom: {db.transactions},
+      readsFrom: {db.transactions, db.accounts, db.exchangeRates},
     ).get();
     return {
       for (final r in rows)
@@ -356,7 +421,8 @@ class FinanceService {
 
   Future<int> _expenseWhere(Period p, String categoryFilter) => _scalar(
     '''
-    SELECT COALESCE(SUM(t.amount), 0) FROM transactions t
+    SELECT COALESCE(SUM(${idrSql('t.amount', 't.account_id')}), 0)
+    FROM transactions t
     JOIN categories c ON c.id = t.category_id
     WHERE t.type = 'expense' AND t.$_confirmed AND $categoryFilter
       AND t.transaction_at >= ? AND t.transaction_at < ?
@@ -392,7 +458,8 @@ class FinanceService {
     final transferred = await _scalar(
       '''
       SELECT COALESCE(SUM(CASE WHEN t.transfer_to_account_id = g.linked_account_id
-          THEN t.amount ELSE -t.amount END), 0)
+          THEN ${idrSql('t.amount', 't.account_id')}
+          ELSE -${idrSql('t.amount', 't.account_id')} END), 0)
       FROM transactions t
       JOIN goals g ON g.linked_account_id IN (t.account_id, t.transfer_to_account_id)
       WHERE g.type = 'development' AND t.type = 'transfer' AND t.$_confirmed
@@ -426,9 +493,10 @@ class FinanceService {
   /// §15 confirmed expenses that came from recurring instances.
   Future<int> recurringExpense(Period p) => _scalar(
     '''
-    SELECT COALESCE(SUM(amount), 0) FROM transactions
-    WHERE type = 'expense' AND $_confirmed AND recurring_instance_id IS NOT NULL
-      AND transaction_at >= ? AND transaction_at < ?
+    SELECT COALESCE(SUM(${idrSql('t.amount', 't.account_id')}), 0)
+    FROM transactions t
+    WHERE t.type = 'expense' AND t.$_confirmed AND t.recurring_instance_id IS NOT NULL
+      AND t.transaction_at >= ? AND t.transaction_at < ?
     ''',
     [sqlDateTime(p.start), sqlDateTime(p.end)],
   );
@@ -440,8 +508,8 @@ class FinanceService {
   Future<int> netSaved(Period p) => _scalar(
     '''
     SELECT COALESCE(SUM(CASE
-        WHEN dst.type = 'savings' AND src.type <> 'savings' THEN t.amount
-        WHEN src.type = 'savings' AND dst.type <> 'savings' THEN -t.amount
+        WHEN dst.type = 'savings' AND src.type <> 'savings' THEN ${idrSql('t.amount', 't.account_id')}
+        WHEN src.type = 'savings' AND dst.type <> 'savings' THEN -${idrSql('t.amount', 't.account_id')}
         ELSE 0 END), 0)
     FROM transactions t
     JOIN accounts src ON src.id = t.account_id
@@ -457,10 +525,12 @@ class FinanceService {
       .getSingle();
 
   /// Upcoming Obligations: open recurring expense instances due up to the end
-  /// of [now]'s month (includes overdue, still-unpaid ones).
+  /// of [now]'s month (includes overdue, still-unpaid ones), in rupiah — a
+  /// rule follows its account's currency (schema v5).
   Future<int> upcomingObligations(DateTime now) => _scalar(
     '''
-    SELECT COALESCE(SUM(i.amount), 0) FROM recurring_instances i
+    SELECT COALESCE(SUM(${idrSql('i.amount', 'r.account_id')}), 0)
+    FROM recurring_instances i
     JOIN recurring_rules r ON r.id = i.recurring_rule_id
     WHERE r.type = 'expense' AND i.status IN ('scheduled', 'pending')
       AND i.due_date <= ?
@@ -481,7 +551,7 @@ class FinanceService {
     final settings = await planningSettings();
     final month = Period.month(now);
     final goalReserve = await _scalar(
-      'SELECT COALESCE(SUM(MAX($_goalSavedSql, 0)), 0) FROM $_goalsJoin '
+      'SELECT COALESCE(SUM(MAX($_goalSavedIdrSql, 0)), 0) FROM $_goalsJoin '
       'WHERE g.is_active = 1 AND (la.id IS NULL OR la.is_active = 1)',
       [sqlDateTime(now)],
     );
@@ -504,7 +574,7 @@ class FinanceService {
   Future<EmergencyStatus> emergencyStatus(DateTime now) async {
     final settings = await planningSettings();
     final balance = await _scalar(
-      'SELECT COALESCE(SUM(MAX($_goalSavedSql, 0)), 0) FROM $_goalsJoin '
+      'SELECT COALESCE(SUM(MAX($_goalSavedIdrSql, 0)), 0) FROM $_goalsJoin '
       "WHERE g.type = 'emergency' AND g.is_active = 1",
       [sqlDateTime(now)],
     );
@@ -525,7 +595,7 @@ class FinanceService {
       WHERE b.is_active = 1 AND b.period_start <= ? AND b.period_end >= ?
       ''',
       variables: [Variable(sqlDate(monthEnd(month))), Variable(sqlDate(monthStart(month)))],
-      readsFrom: {db.budgets, db.transactions},
+      readsFrom: {db.budgets, db.transactions, db.accounts, db.exchangeRates},
     ).get();
     if (rows.isEmpty) return const [];
     final actuals = {for (final r in rows) r.read<String>('id'): r.read<int>('actual')};
@@ -546,9 +616,10 @@ class FinanceService {
   }
 
   /// Confirmed expense of a category from [start] through the whole [end]
-  /// day (date-only columns/params; SQLite `date()` is calendar-correct).
+  /// day (date-only columns/params; SQLite `date()` is calendar-correct),
+  /// in rupiah at each account's manual kurs (schema v5).
   static String _budgetActualSql(String category, String start, String end) => '''
-    COALESCE((SELECT SUM(t.amount) FROM transactions t
+    COALESCE((SELECT SUM(${idrSql('t.amount', 't.account_id')}) FROM transactions t
       WHERE t.type = 'expense' AND t.$_confirmed AND t.category_id = $category
         AND t.transaction_at >= $start AND t.transaction_at < date($end, '+1 day')), 0)''';
 

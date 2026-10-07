@@ -8,10 +8,13 @@ String transactionsCsvFileName(DateTime t) {
   return 'finbro-transaksi-${isoDate(t)}-${two(t.hour)}${two(t.minute)}.csv';
 }
 
+/// `amount` is in whole units of `currency` (the account's ISO code) with a
+/// `.` decimal mark: `25000` IDR, `12.50` USD.
 const transactionsCsvHeader = [
   'date',
   'type',
   'amount',
+  'currency',
   'category',
   'account',
   'to_account',
@@ -20,10 +23,20 @@ const transactionsCsvHeader = [
   'status',
 ];
 
+/// [minor] units of [c] as a plain decimal (`1250` USD → `12.50`).
+String _plainAmount(int minor, Currency c) {
+  if (c.decimals == 0) return '$minor';
+  final digits = minor.abs().toString().padLeft(c.decimals + 1, '0');
+  final cut = digits.length - c.decimals;
+  return '${minor < 0 ? '-' : ''}${digits.substring(0, cut)}.${digits.substring(cut)}';
+}
+
 /// All transactions (every status, oldest first) as RFC 4180 CSV with a UTF-8
 /// BOM so spreadsheet apps read Indonesian text correctly.
 Future<String> buildTransactionsCsv(AppDatabase db) async {
-  final accounts = {for (final a in await db.select(db.accounts).get()) a.id: a.name};
+  final accountRows = await db.select(db.accounts).get();
+  final accounts = {for (final a in accountRows) a.id: a.name};
+  final currencies = {for (final a in accountRows) a.id: Currency.fromCode(a.currency)};
   final categories = {for (final c in await db.select(db.categories).get()) c.id: c.name};
   final rows = await (db.select(db.transactions)
         ..orderBy([(t) => OrderingTerm.asc(t.transactionAt), (t) => OrderingTerm.asc(t.createdAt)]))
@@ -31,10 +44,12 @@ Future<String> buildTransactionsCsv(AppDatabase db) async {
 
   final buf = StringBuffer('\uFEFF')..write(transactionsCsvHeader.join(','))..write('\r\n');
   for (final t in rows) {
+    final currency = currencies[t.accountId] ?? Currency.idr;
     final fields = [
       isoLocal(t.transactionAt),
       t.type.db,
-      '${t.amount}',
+      _plainAmount(t.amount, currency),
+      currency.code,
       categories[t.categoryId] ?? '',
       accounts[t.accountId] ?? '',
       accounts[t.transferToAccountId] ?? '',

@@ -92,7 +92,8 @@ class _RuleCard extends ConsumerWidget {
     final fin = context.fin;
     final rule = overview.rule;
     final category = ref.watch(categoryMapProvider)[rule.categoryId];
-    final account = ref.watch(accountMapProvider)[rule.accountId]?.name ?? '-';
+    final accountRow = ref.watch(accountMapProvider)[rule.accountId];
+    final account = accountRow?.name ?? '-';
     final isIncome = rule.type == TransactionType.income;
     final next = overview.next;
     final nextText = !rule.active
@@ -140,6 +141,7 @@ class _RuleCard extends ConsumerWidget {
               isIncome ? rule.amount : -rule.amount,
               colorize: isIncome,
               signed: true,
+              currency: Currency.fromCode(accountRow?.currency ?? 'IDR'),
               style: context.text.titleSmall?.copyWith(color: rule.active ? null : fin.muted),
             ),
           ],

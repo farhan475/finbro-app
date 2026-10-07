@@ -42,7 +42,7 @@ final homeOverviewProvider = FutureProvider<HomeOverview>((ref) async {
   return HomeOverview(
     available: await finance.availableToSpendBreakdown(
       now,
-      totalBalance: balances.fold<int>(0, (s, b) => s + b.balance),
+      totalBalance: balances.fold<int>(0, (s, b) => s + b.idrBalance),
       monthIncome: summary.income,
     ),
     balances: balances,

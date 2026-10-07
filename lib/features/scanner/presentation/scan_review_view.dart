@@ -109,8 +109,18 @@ class _ScanReviewViewState extends ConsumerState<ScanReviewView> {
       _categoryId ??= s?.categoryId;
     }
     if (!mounted) return;
-    setState(() => _accountId ??= accountId);
+    setState(() {
+      // The OCR prefill is typed as IDR until the account is known; it then
+      // follows the account's currency (MoneyField.switchCurrency rule).
+      if (_accountId == null && accountId != null) {
+        MoneyField.switchCurrency(_amount, Currency.idr, _currencyOf(accountId));
+      }
+      _accountId ??= accountId;
+    });
   }
+
+  Currency _currencyOf(String? accountId) =>
+      Currency.fromCode(ref.read(accountMapProvider)[accountId]?.currency ?? 'IDR');
 
   CategoryType get _categoryType =>
       _type == TransactionType.income ? CategoryType.income : CategoryType.expense;
@@ -134,7 +144,7 @@ class _ScanReviewViewState extends ConsumerState<ScanReviewView> {
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
-    final amount = parseRupiah(_amount.text)!;
+    final amount = parseMoney(_amount.text, _currencyOf(_accountId))!;
     final accountId = _accountId;
     if (accountId == null) {
       showSnack(context, 'Pilih account.');
@@ -209,6 +219,7 @@ class _ScanReviewViewState extends ConsumerState<ScanReviewView> {
 
   Future<bool> _confirmDuplicates(List<DuplicateCandidate> list) async {
     final categories = ref.read(categoryMapProvider);
+    final accountMap = ref.read(accountMapProvider);
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -227,7 +238,7 @@ class _ScanReviewViewState extends ConsumerState<ScanReviewView> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '${formatRupiah(d.transaction.amount)} · ${categories[d.transaction.categoryId]?.name ?? d.transaction.type.label}',
+                        '${formatMoney(d.transaction.amount, Currency.fromCode(accountMap[d.transaction.accountId]?.currency ?? 'IDR'))} · ${categories[d.transaction.categoryId]?.name ?? d.transaction.type.label}',
                         style: context.text.titleSmall,
                       ),
                       Text(
@@ -365,7 +376,7 @@ class _ScanReviewViewState extends ConsumerState<ScanReviewView> {
           const SizedBox(height: 6),
           _Highlight(
             active: !_touched.contains('amount') && _p.amount.confidence != FieldConfidence.high,
-            child: MoneyField(controller: _amount, large: true),
+            child: MoneyField(controller: _amount, large: true, currency: _currencyOf(_accountId)),
           ),
           if (!breakdown.isEmpty) ...[
             const SizedBox(height: 8),
@@ -426,7 +437,10 @@ class _ScanReviewViewState extends ConsumerState<ScanReviewView> {
               for (final a in accounts)
                 DropdownMenuItem(value: a.id, child: Text(a.name, overflow: TextOverflow.ellipsis)),
             ],
-            onChanged: (v) => setState(() => _accountId = v),
+            onChanged: (v) => setState(() {
+              MoneyField.switchCurrency(_amount, _currencyOf(_accountId), _currencyOf(v));
+              _accountId = v;
+            }),
             validator: (v) => v == null ? 'Pilih account' : null,
           ),
           if (status != null || _p.reference.value != null || _p.items.isNotEmpty) ...[

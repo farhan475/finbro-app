@@ -85,7 +85,7 @@ class _RecurringFormScreenState extends ConsumerState<RecurringFormScreen> {
     if (d != null) {
       _type = d.type;
       _name.text = d.name;
-      _amount.text = MoneyField.textFor(d.amount);
+      _amount.text = MoneyField.textFor(d.amount, _currencyOf(ref.read(accountMapProvider), d.accountId));
       _accountId = d.accountId;
       _categoryId = d.categoryId;
       _frequency = d.frequency;
@@ -104,6 +104,9 @@ class _RecurringFormScreenState extends ConsumerState<RecurringFormScreen> {
     }
     _interval.addListener(() => setState(() {}));
   }
+
+  static Currency _currencyOf(Map<String, Account> accounts, String? id) =>
+      Currency.fromCode(accounts[id]?.currency ?? 'IDR');
 
   void _applySalaryPreset() {
     _type = TransactionType.income;
@@ -184,7 +187,7 @@ class _RecurringFormScreenState extends ConsumerState<RecurringFormScreen> {
     final draft = RecurringRuleDraft(
       type: _type,
       name: _name.text,
-      amount: parseRupiah(_amount.text) ?? 0,
+      amount: parseMoney(_amount.text, _currencyOf(ref.read(accountMapProvider), _accountId)) ?? 0,
       accountId: _accountId!,
       categoryId: _categoryId!,
       frequency: _frequency,
@@ -278,7 +281,12 @@ class _RecurringFormScreenState extends ConsumerState<RecurringFormScreen> {
               validator: (v) => (v == null || v.trim().isEmpty) ? 'Nama wajib diisi' : null,
             ),
             const SizedBox(height: 8),
-            MoneyField(controller: _amount, label: 'Nominal', large: true),
+            MoneyField(
+              controller: _amount,
+              label: 'Nominal',
+              large: true,
+              currency: _currencyOf(accountMap, _accountId),
+            ),
             const SizedBox(height: 16),
             if (accountChoices.isEmpty)
               FinCard(
@@ -299,7 +307,10 @@ class _RecurringFormScreenState extends ConsumerState<RecurringFormScreen> {
                   for (final a in accountChoices)
                     DropdownMenuItem(value: a.id, child: Text(a.name, overflow: TextOverflow.ellipsis)),
                 ],
-                onChanged: (v) => setState(() => _accountId = v),
+                onChanged: (v) => setState(() {
+                  MoneyField.switchCurrency(_amount, _currencyOf(accountMap, _accountId), _currencyOf(accountMap, v));
+                  _accountId = v;
+                }),
                 validator: (v) => v == null ? 'Pilih account' : null,
               ),
             const SizedBox(height: 16),

@@ -1,13 +1,20 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../app/theme/app_theme.dart';
 import '../../../../core/database/app_database.dart';
+import '../../../../core/finance/finance_service.dart';
 import '../../../../core/formatting/dates.dart';
 import '../../../../core/formatting/money.dart';
+import '../../../../shared/providers/lookups.dart';
 import '../../../../shared/widgets/transaction_tile.dart';
 import '../../domain/day_groups.dart';
+
+/// Live row → rupiah converter for [groupByDay] day totals.
+int Function(LedgerTransaction) watchIdrConverter(WidgetRef ref) =>
+    idrConverter(ref.watch(accountMapProvider), ref.watch(exchangeRateMapProvider).value ?? const {});
 
 String sourceLabel(SourceType s) => switch (s) {
   SourceType.manual => 'Manual',

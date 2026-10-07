@@ -8,6 +8,8 @@ import 'enums.dart';
 // recurring_rules.interval_days/month_of_year/reminder_offset_days/reminder_time,
 // attachments.image_hash, planning_settings.flexible_residual_mode/user_reserve,
 // and the merchant_mappings table.
+// Schema v5 adds the exchange_rates table (manual multi-currency rates) and
+// the Currency enum.
 
 mixin _Timestamps on Table {
   TextColumn get createdAt => text().map(const LocalDateTimeConverter())();
@@ -335,6 +337,20 @@ class MerchantMappings extends Table with _Timestamps {
 
   @override
   Set<Column> get primaryKey => {id};
+}
+
+@DataClassName('ExchangeRate')
+class ExchangeRates extends Table {
+  /// ISO 4217 currency code, e.g. `USD`.
+  TextColumn get code => text()();
+
+  /// Rupiah per 1 unit of [code] (e.g. USD row: 16250.0).
+  RealColumn get rateToIdr => real().customConstraint('CHECK (rate_to_idr > 0)')();
+
+  TextColumn get updatedAt => text().map(const LocalDateTimeConverter()).nullable()();
+
+  @override
+  Set<Column> get primaryKey => {code};
 }
 
 @DataClassName('AppSetting')

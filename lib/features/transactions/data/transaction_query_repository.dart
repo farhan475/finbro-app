@@ -2,8 +2,13 @@ import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/database/app_database.dart';
+import '../../../core/finance/finance_service.dart';
 import '../../../core/providers.dart';
 import '../domain/transaction_filter.dart';
+
+/// Row amount in rupiah (account currency at its manual kurs), so the
+/// filter's Rp min/max compare like-for-like across currencies.
+final _idrAmount = CustomExpression<int>(FinanceService.idrSql('transactions.amount', 'transactions.account_id'));
 
 final transactionQueryRepositoryProvider = Provider<TransactionQueryRepository>(
   (ref) => TransactionQueryRepository(ref.watch(databaseProvider)),
@@ -110,8 +115,8 @@ class TransactionQueryRepository {
       if (f.endBefore != null) t.transactionAt.isSmallerThanValue(sqlDateTime(f.endBefore!)),
       if (f.categoryIds.isNotEmpty) t.categoryId.isIn(f.categoryIds),
       if (f.accountIds.isNotEmpty) t.accountId.isIn(f.accountIds) | t.transferToAccountId.isIn(f.accountIds),
-      if (f.minAmount != null) t.amount.isBiggerOrEqualValue(f.minAmount!),
-      if (f.maxAmount != null) t.amount.isSmallerOrEqualValue(f.maxAmount!),
+      if (f.minAmount != null) _idrAmount.isBiggerOrEqualValue(f.minAmount!),
+      if (f.maxAmount != null) _idrAmount.isSmallerOrEqualValue(f.maxAmount!),
       if (keyword.isNotEmpty) _keywordMatch(keyword, [t.note, cat.name, src.name, dest.name]),
       if (after != null) _after(t, after),
     ];

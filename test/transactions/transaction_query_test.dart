@@ -114,6 +114,29 @@ void main() {
       expect(await ids(const TransactionFilter(minAmount: 300000, maxAmount: 400000)), isEmpty);
     });
 
+    test('amount range compares the rupiah value of non-IDR rows', () async {
+      await db.into(db.exchangeRates).insertOnConflictUpdate(
+        ExchangeRatesCompanion.insert(code: 'USD', rateToIdr: 16000, updatedAt: Value(created)),
+      );
+      await db.into(db.accounts).insert(
+        AccountsCompanion.insert(
+          id: 'wise',
+          name: 'Wise',
+          type: AccountType.bank,
+          currency: const Value('USD'),
+          createdAt: created,
+          updatedAt: created,
+        ),
+      );
+      // $12.50 = 1250¢ → Rp 200.000; raw 1250 would fail min 150.000.
+      final usd = await expense(1250, DateTime(2026, 9, 26), account: 'wise');
+      final idr = await expense(100000, DateTime(2026, 9, 26, 1));
+      final hits = await ids(const TransactionFilter(type: TransactionType.expense, minAmount: 150000));
+      expect(hits, contains(usd));
+      expect(hits, isNot(contains(idr)));
+      expect(await ids(const TransactionFilter(maxAmount: 1250)), isNot(contains(usd)));
+    });
+
     test('keyword matches note, category and account names, case-insensitive', () async {
       expect(await ids(const TransactionFilter(keyword: 'PADANG')), [food]);
       expect(await ids(const TransactionFilter(keyword: 'salary')), [salary]);

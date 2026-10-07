@@ -87,6 +87,7 @@ class SettingsGroup extends ConsumerWidget {
           subtitle: lastBackup == null ? 'Belum pernah backup' : 'Terakhir ${formatDay(lastBackup)}',
           route: Routes.backup,
         ),
+        const NavTile(icon: Icons.currency_exchange, title: 'Kurs Mata Uang', route: Routes.rates),
         const NavTile(icon: Icons.article_outlined, title: 'Log aplikasi', route: Routes.log),
         const NavTile(icon: Icons.help_outline, title: 'Bantuan', route: SettingsPaths.help),
         const NavTile(icon: Icons.info_outline, title: 'Tentang', route: SettingsPaths.about),

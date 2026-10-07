@@ -29,6 +29,7 @@ class TransactionTile extends ConsumerWidget {
     final category = categories[tx.categoryId];
     final title = isTransfer ? 'Transfer' : (category?.name ?? 'Tanpa kategori');
     final from = accounts[tx.accountId]?.name ?? '-';
+    final currency = Currency.fromCode(accounts[tx.accountId]?.currency ?? 'IDR');
     final account = isTransfer ? '$from → ${accounts[tx.transferToAccountId]?.name ?? '-'}' : from;
     final note = tx.note;
     final subtitle = [
@@ -63,9 +64,15 @@ class TransactionTile extends ConsumerWidget {
             ),
             const SizedBox(width: 12),
             if (isTransfer)
-              AmountText(tx.amount, style: context.text.titleSmall!.copyWith(color: fin.muted))
+              AmountText(tx.amount, currency: currency, style: context.text.titleSmall!.copyWith(color: fin.muted))
             else
-              AmountText(signed, colorize: tx.type == TransactionType.income, signed: true, style: context.text.titleSmall),
+              AmountText(
+                signed,
+                colorize: tx.type == TransactionType.income,
+                signed: true,
+                currency: currency,
+                style: context.text.titleSmall,
+              ),
           ],
         ),
       ),
