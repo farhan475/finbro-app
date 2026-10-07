@@ -44,22 +44,24 @@ DateTime reminderAt(RecurringRule rule, DateTime due) {
   return DateTime(due.year, due.month, due.day - rule.reminderOffsetDays, t.hour, t.minute);
 }
 
-/// Notification text, e.g. "Salary Rp 5.000.000 dijadwalkan besok ke BCA".
-String reminderBody(RecurringRule rule, int amount, String accountName) {
+/// Notification text, e.g. "Salary Rp 5.000.000 dijadwalkan besok ke BCA";
+/// [amount] is in minor units of [currency] (the rule's account currency).
+String reminderBody(RecurringRule rule, int amount, String accountName, {Currency currency = Currency.idr}) {
   final when = switch (rule.reminderOffsetDays) {
     0 => 'hari ini',
     1 => 'besok',
     final n => 'dalam $n hari',
   };
   final dir = rule.type == TransactionType.income ? 'ke' : 'dari';
-  return '${rule.name} ${formatRupiah(amount)} dijadwalkan $when $dir $accountName';
+  return '${rule.name} ${formatMoney(amount, currency)} dijadwalkan $when $dir $accountName';
 }
 
 const _openStatuses = ['scheduled', 'pending'];
 
 /// Generates recurring instances, processes auto-confirm and keeps reminder
-/// notifications in sync. Runs on app start/resume (no background service)
-/// and after every rule change.
+/// notifications in sync. Runs on app start/resume, in the periodic
+/// background job (a second connection, possibly at the same time) and
+/// after every rule change.
 class RecurringEngine {
   RecurringEngine(
     this.db,
@@ -88,17 +90,22 @@ class RecurringEngine {
   /// Idempotent: generates missing instances up to [generationHorizon],
   /// moves due instances to pending, auto-confirms opted-in rules and
   /// (re)schedules reminders. Calls are serialized (never interleave).
+  ///
+  /// Safe against a concurrent sync on another connection (app + background
+  /// job): generation reads and inserts in one write transaction, and an
+  /// instance is posted only by the transaction that closes it while open.
   Future<void> sync(DateTime now) => _serialized(() => _sync(now));
 
   Future<void> _sync(DateTime now) async {
     final today = dateOnly(now);
     await _repairConfirmed(now);
-
-    final rules = await (db.select(db.recurringRules)..where((r) => r.active.equals(true))).get();
-    await _generate(rules, now);
+    await _generate(now);
     await _normalizeStatuses(today, now);
 
-    for (final rule in rules.where((r) => r.autoConfirm)) {
+    final autoRules = await (db.select(db.recurringRules)
+          ..where((r) => r.active.equals(true) & r.autoConfirm.equals(true)))
+        .get();
+    for (final rule in autoRules) {
       final due = await (db.select(db.recurringInstances)
             ..where(
               (i) =>
@@ -165,14 +172,18 @@ class RecurringEngine {
           ..where((i) => i.recurringRuleId.equals(ruleId) & i.status.isIn(_openStatuses)))
         .get();
     final end = rule.endDate;
+    // Only still-open rows are touched: the other connection may have
+    // confirmed one meanwhile, and deleting it would free its period for a
+    // second posting.
+    Expression<bool> stillOpen($RecurringInstancesTable i, String id) => i.id.equals(id) & i.status.isIn(_openStatuses);
     for (final inst in open) {
       final outside = inst.dueDate.isBefore(rule.startDate) || (end != null && inst.dueDate.isAfter(end));
       final stale = !inst.dueDate.isBefore(today) && !desired.contains(inst.dueDate);
       if (outside || stale) {
         await _notifications.cancel(NotificationIds.recurring(inst.id));
-        await (db.delete(db.recurringInstances)..where((i) => i.id.equals(inst.id))).go();
+        await (db.delete(db.recurringInstances)..where((i) => stillOpen(i, inst.id))).go();
       } else if (inst.amount != rule.amount) {
-        await (db.update(db.recurringInstances)..where((i) => i.id.equals(inst.id))).write(
+        await (db.update(db.recurringInstances)..where((i) => stillOpen(i, inst.id))).write(
           RecurringInstancesCompanion(amount: Value(rule.amount), updatedAt: Value(now)),
         );
       }
@@ -297,9 +308,14 @@ class RecurringEngine {
     }
   }
 
-  /// Inserts the missing instances of [rules] up to [generationHorizon] in
-  /// one batch, and writes nothing when none are missing (a drift batch
-  /// always notifies listeners).
+  /// Inserts the missing instances of the active rules up to
+  /// [generationHorizon] in one batch, and writes nothing when none are
+  /// missing (a drift batch always notifies listeners).
+  ///
+  /// Rules, existing instances and the insert share one write transaction
+  /// (drift begins it `IMMEDIATE`): a rule edited, deactivated or deleted on
+  /// another connection meanwhile cannot leave instances of its old schedule
+  /// behind (a second payment in one period).
   ///
   /// Candidates start at the current recurrence period, or right after the
   /// rule's latest instance when that is earlier (catch-up after the app was
@@ -308,7 +324,8 @@ class RecurringEngine {
   /// A candidate is dropped when its period already has an instance of any
   /// status, so an edited schedule never adds a second payment to a settled
   /// period, yet the current period keeps its obligation when it has none.
-  Future<void> _generate(List<RecurringRule> rules, DateTime now) async {
+  Future<void> _generate(DateTime now) => db.transaction(() async {
+    final rules = await (db.select(db.recurringRules)..where((r) => r.active.equals(true))).get();
     if (rules.isEmpty) return;
     final today = dateOnly(now);
     final horizon = generationHorizon(now);
@@ -369,7 +386,7 @@ class RecurringEngine {
     if (rows.isEmpty) return;
     // UNIQUE (recurring_rule_id, due_date) keeps generation idempotent.
     await db.batch((b) => b.insertAll(db.recurringInstances, rows, mode: InsertMode.insertOrIgnore));
-  }
+  });
 
   Future<void> _normalizeStatuses(DateTime today, DateTime now) async {
     await (db.update(db.recurringInstances)
@@ -398,8 +415,8 @@ class RecurringEngine {
     ])..where(db.recurringInstances.dueDate.isBiggerOrEqualValue(sqlDate(today)));
     final rows = await q.get();
     final accounts = rows.isEmpty
-        ? const <String, String>{}
-        : {for (final a in await db.select(db.accounts).get()) a.id: a.name};
+        ? const <String, Account>{}
+        : {for (final a in await db.select(db.accounts).get()) a.id: a};
     final wanted = <int>{};
     bool? exact;
     for (final row in rows) {
@@ -410,7 +427,13 @@ class RecurringEngine {
       wanted.add(id);
       final at = reminderAt(rule, inst.dueDate);
       final title = rule.type == TransactionType.income ? 'Income terjadwal' : 'Expense terjadwal';
-      final body = reminderBody(rule, inst.amount, accounts[rule.accountId] ?? '-');
+      final account = accounts[rule.accountId];
+      final body = reminderBody(
+        rule,
+        inst.amount,
+        account?.name ?? '-',
+        currency: Currency.fromCode(account?.currency ?? 'IDR'),
+      );
       exact ??= await exactRemindersActive(AppSettingsRepository(db), _notifications);
       // `at`/`text`/`exact` only make the payload change whenever the reminder does.
       final payload = {
