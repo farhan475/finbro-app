@@ -36,6 +36,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   drift: ^2.35.0
   drift_flutter: ^0.3.1
+  sqlite3: ^3.5.2
   path_provider: ^2.1.6
   path: ^1.9.1
   flutter_riverpod: ^3.4.3
@@ -53,6 +54,7 @@ dependencies:
   local_auth: ^3.0.2
   crypto: ^3.0.7
   collection: ^1.19.1
+  convert: ^3.1.2
   flutter_localizations:
     sdk: flutter
   pdf: ^3.13.1
@@ -75,6 +77,14 @@ dev_dependencies:
   drift_dev: ^2.35.0
   build_runner: ^2.16.1
   flutter_launcher_icons: ^0.14.4
+
+# package:sqlite3 bundles SQLCipher (with OpenSSL) instead of plain SQLite on
+# every target, including the `flutter test` host: the live database is
+# encrypted (lib/core/database/database_cipher.dart).
+hooks:
+  user_defines:
+    sqlite3:
+      source: sqlcipher
 
 flutter:
   uses-material-design: true
